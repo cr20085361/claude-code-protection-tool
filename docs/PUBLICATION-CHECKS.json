@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "source_version": "v1.3.0",
+  "checked_at": "2026-10-08T17:46:24.9865989+08:00",
+  "scope": "Public source copy, isolated checks only",
+  "power_shell_parser_files": 54,
+  "javascript_syntax_files": 2,
+  "python_ast_files": 1,
+  "csharp_launcher_compile": "PASS",
+  "csharp_supervisor_host_compile": "PASS",
+  "tests": [
+    {
+      "native_installation_executed": false,
+      "cases": 49,
+      "status": "PASS",
+      "script": "Test-ClaudeDesktopUpdate.ps1"
+    },
+    {
+      "power_shell_cases": 37,
+      "status": "PASS",
+      "csharp_cases": 9,
+      "script": "Test-ClaudeMaintenance.ps1"
+    },
+    {
+      "status": "PASS",
+      "paired_power_shell_csharp_cases": 22,
+      "script": "Test-ClaudeSupervisorHealth.ps1"
+    },
+    {
+      "cases": 28,
+      "status": "PASS",
+      "script": "Test-ClaudeLifecycle.ps1"
+    },
+    {
+      "cases": 33,
+      "status": "PASS",
+      "script": "Test-ClaudeVersionInfo.ps1"
+    }
+  ],
+  "production_modified": false,
+  "example_configuration_network_initialization": "NOT_RUN",
+  "cross_machine_deployment": "NOT_RUN",
+  "native_higher_version_installation": "NOT_RUN"
+}

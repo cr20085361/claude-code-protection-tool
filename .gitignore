@@ -1,0 +1,37 @@
+# Local deployment data and browser/account state
+/private/
+/runtime/
+/evidence/
+/candidate/
+/browser-profile/
+/browser-test-profile*/
+/验收测试文件/
+/claudecode教程/
+
+# Credentials and machine-specific configuration
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+*.credentials.json
+settings.json
+proxy.json
+deployment.json
+launcher-paths.txt
+
+# Generated packages, binaries, logs and Python caches
+*.exe
+*.dll
+*.msix
+*.msixbundle
+*.msi
+*.zip
+*.zst
+*.log
+*.jsonl
+*.tmp
+*.update-tmp
+__pycache__/
+*.pyc

@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "baseline": {
+    "version": "v1.0.0",
+    "recorded_at": "2026-10-01T12:03:55+08:00",
+    "version_source": null
+  },
+  "current_version": "v1.3.0",
+  "completed_iterations": 6,
+  "history": [
+    {
+      "id": "1ed80264-8644-40fd-a830-3d725048fa07",
+      "from_version": "v1.0.0",
+      "to_version": "v1.0.1",
+      "level": "patch",
+      "summary": "修复普通桌面入口缺失的固定代理策略和已核准Code缓存；安装在桌面用户上下文执行并回读",
+      "verification": "Actual launcher Check/Start/Reopen passed; desktop proxy and runtime isolation passed; 10 guard regressions; 15 protected hashes unchanged; PowerShell parser passed",
+      "recorded_at": "2026-10-01T12:03:55+08:00"
+    },
+    {
+      "id": "bb3095aa-6d13-47af-8db3-21d2cc836d3e",
+      "from_version": "v1.0.1",
+      "to_version": "v1.1.0",
+      "level": "minor",
+      "summary": "修复夜间更新导致的规则失效和真实桌面缓存门禁；新增受控版本维护、IPv4专用守护、有限恢复、运行环境检查及健康证据",
+      "verification": "14 hardening cases including native IPv6 rejection; 6 supervisor decision cases; 8 acceptance regression cases; real desktop policy/cache repair; real proxy recovery 20.04s; 3 fault cases; IPv4 LAN firewall contrast; actual GUI Start/Check/Exit/Reopen and Desktop TCP/TLS verified; protected hashes unchanged; parser passed. New Code file-read and sleep/long-run remain NOT_RUN.",
+      "recorded_at": "2026-10-02T17:31:45+08:00"
+    },
+    {
+      "id": "03ef1559-f84d-466f-a4df-061f146330ce",
+      "from_version": "v1.1.0",
+      "to_version": "v1.1.1",
+      "level": "patch",
+      "summary": "修复守护过期与恢复缺口：无控制台宿主、当次健康确认、持久退避及维护后的旧安全暂停记录识别，兼容维护回滚",
+      "verification": "135 fixture cases; actual GUI Start/Check/Close/Reopen; native host exit UI recovery 104.11s; stalled worker watchdog 122.24s; persistent three failures and five minute recovery without launcher; 10 protected hashes unchanged; Desktop TCP 10818; PS/Python parsers. Sleep/full-relogin/24-72h remain NOT_RUN. Original Ctrl+C trigger and one prior environment reader failure remain unconfirmed.",
+      "recorded_at": "2026-10-07T23:16:14+08:00"
+    },
+    {
+      "id": "db8e1ff8-b687-452d-b11d-e82919fe81df",
+      "from_version": "v1.1.1",
+      "to_version": "v1.1.2",
+      "level": "patch",
+      "summary": "修复维护状态与结果反馈：操作关联、授权取消识别、持续观察、关闭重开接续、中断恢复及完成结果同步",
+      "verification": "30 maintenance PS cases and 9 C# contracts; 7 native window fixtures; lifecycle 28, health 22, supervisor decisions 23; actual installed GUI maintenance 207.17 seconds, amber progress, close/reopen with no auto-start, correlated green completion, Check and completed reopen/Start PASS; 9 protected byte hashes unchanged, 30 firewall rules semantically unchanged, system proxy unchanged, reliability hashes matched. New Code session, sleep/relogin/long-run NOT_RUN.",
+      "recorded_at": "2026-10-08T15:39:15+08:00"
+    },
+    {
+      "id": "1c86cda8-5c09-43b3-86a6-a89272e35210",
+      "from_version": "v1.1.2",
+      "to_version": "v1.2.0",
+      "level": "minor",
+      "summary": "新增安装和实际运行版本显示、官方新版自动检查及手动查询；保持维护和守护安全门禁",
+      "verification": "33 version logic tests including native PID/file identity; 11 native window cases; maintenance 30 PowerShell plus 9 C# contracts and 7 native window cases; 22 health contract cases; actual installed launcher Start/Check/Close/Reopen and manual official query PASS; 10 protected hashes and core supervisor/runtime unchanged; system proxy unchanged; parsers and x64 build PASS. Real new Code session/TCP, download/install and long-run NOT_RUN.",
+      "recorded_at": "2026-10-08T16:26:39+08:00"
+    },
+    {
+      "id": "6f42d278-c16d-4e83-bc15-0f38cb684cb9",
+      "from_version": "v1.2.0",
+      "to_version": "v1.3.0",
+      "level": "minor",
+      "summary": "修复主按钮上沿遮挡，新增官方 Desktop 及配套 Code 下载核验、同账号安装与维护接续、关闭重开和异常恢复",
+      "verification": "49 isolated update-chain cases; 66 native window and equivalent scaling cases; 37 maintenance PowerShell plus 9 CSharp contracts; 7 maintenance window and 11 version window cases; 22 health and 28 lifecycle cases; actual installed launcher Start/Check/Close/Reopen and official 293331146-byte MSIX download with download-close-reopen, signature and paired Code cache verification PASS; same-version reinstall disabled; 10 protected hashes, core guardian/runtime and system proxy unchanged; parsers and x64 build PASS. Real higher-version MSIX installation, new Code session/TCP, sleep/relogin/long-run/cross-machine DPI NOT_RUN.",
+      "recorded_at": "2026-10-08T17:29:31+08:00"
+    }
+  ]
+}

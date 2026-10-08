@@ -1,0 +1,305 @@
+{
+  "schema_version": 1,
+  "source_version": "v1.3.0",
+  "completed_iterations": 6,
+  "publication_date": "2026-10-08",
+  "purpose": "Public source snapshot; deployment state and credentials are excluded.",
+  "initialization_examples_require_local_review": true,
+  "source_files": [
+    {
+      "path": "Build-ClaudeShortcut.ps1",
+      "sha256": "87fdfd539f94a72e8aaa9581820bc06f61d129ee1f2492067f777806adf2b5f4",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "ClaudeCodeGate.psm1",
+      "sha256": "cee0954a7db5fbc02a1573d0b0ee31b5e3de9d2bc1e04120e711dde6be72e549",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "ClaudeGuard-DesktopUpdate.psm1",
+      "sha256": "60c09dd912fc0e7a1e5f6cfc7dedff50bae8f4c39d675cd214582c9035b6711e",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "ClaudeGuard-Health.ps1",
+      "sha256": "131f39d24012ef7c6d6420de91ae4c6f22107675c47ec7972a14e0cba75fd1c6",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "ClaudeGuard-Lifecycle.ps1",
+      "sha256": "a984c68204058011c41698f7fd3c0104edc597070ae7efc05429d1bf0e51c605",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "ClaudeGuard-Runtime.psm1",
+      "sha256": "a1333347d0a096d9b1c7baa3e77ef7f478a70ff094a6e038499aaefebd05892b",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "ClaudeGuard-Supervisor-v2.ps1",
+      "sha256": "55f9fcca6a42be0b6b67b033a4bc3fce6256e9a652ef649cd45034e741f6c91c",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "ClaudeGuard-Supervisor.ps1",
+      "sha256": "089db2d9238897dc525a46c0f0b8e8e3b59be942bf06f73eb4b37563ffcc92b3",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "ClaudeGuard-UiBridge.ps1",
+      "sha256": "64d6d7389c1c6bb981318ca352d5fb2bdb23da474f82b194e8f0c63dad6c36a8",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "ClaudeGuard-VersionInfo.psm1",
+      "sha256": "25238c103321c96b817611770125dc01965bcab2c84cab80e40cc649be7f8610",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "ClaudeGuard.psm1",
+      "sha256": "a4887229d0f14330f083308b18a099f19328adad65be10b9bb7d680e510d1530",
+      "public_example_substitutions": 6
+    },
+    {
+      "path": "ClaudeGuardLauncher.cs",
+      "sha256": "daa41de4a99e50d38e64edd330266c00a5604fba751bcf87e00c5893ad6539c5",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "ClaudeSupervisorHost.cs",
+      "sha256": "e46fa9b0a75341b35517bc048571a07f32df2e749d8bf65a5c970d3a91066ef7",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Collect-ClaudeRuntimeEvidence.ps1",
+      "sha256": "0b6d79eb971e3227e6a6dd5551ead7a843e2aba37624ea572c351ba7bbf1a99e",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Expand-VerifiedCode.cjs",
+      "sha256": "579894d6fdf45f7add37bd1db28738e7a8e82dc94c0bf01c8621db84adcd72f6",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Finalize-ClaudeCode-Admin.ps1",
+      "sha256": "18e8ccc22cef36b3a0ab39a04f137a92773274cb0979228865b4bcfdb623a5f5",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Get-ClaudeHealth.ps1",
+      "sha256": "4b3ebbf4b67679de74b70f9d942318170f12af0db7355fb614e77bf382238992",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Get-ClaudeVersionInfo.ps1",
+      "sha256": "dbccb7b20084512a9bc2a25070cddeca40ed544322079ab2d4781346f08bbaba",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Initialize-ClaudeGuard.ps1",
+      "sha256": "7aba23cea7e443b41db6e5969df0d378f13f5acb960510889b797525c64d5c79",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Inspect-ClaudeCodeRuntime.ps1",
+      "sha256": "4d58d930a1c9bd76cf8b9b05b91ce2679728f909f270ce355b00e85b39be11ec",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Install-ClaudeFirewall-Admin.ps1",
+      "sha256": "0cb1e9d305cc4eddc7b7bd5c89c6afb839595fea9a772ab589cf7f6406165387",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Install-ClaudeGuard.ps1",
+      "sha256": "d3dfbbbaec6601171cb2c9b9e6c9082358346a40efceb0ce5f118f9033d11d7f",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Invoke-ClaudeDesktopUpdate.ps1",
+      "sha256": "ba4892b290d06bf5c14988d91e26b89917636d03f1a6a2983fbe200bf1ff4814",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Prepare-ClaudeCode.ps1",
+      "sha256": "27026dda789f2d185000c97f86bd98b490f52d48146b3030215d078aa7158371",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Read-ClaudeProcessEnvironment.py",
+      "sha256": "18e8e08cc14bf818224a4656892ab7620b7572895bbf45e495df926ca3650a01",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Read-DesktopCodeManifest.cjs",
+      "sha256": "bc0c751d1591b5a67881a038372fa5b7c7a435d28bda841869ca743813039736",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Remove-ClaudeGuard.ps1",
+      "sha256": "96dc10e69fba498cef985dd51fb3a5e8f5cd7cf31b2afcb2b5d9a2a55b626690",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Repair-ClaudeCodeContext-Admin.ps1",
+      "sha256": "25d2554abb7e2983ef923cef2d58d96442fb90269c61de5c832d911e3e14800f",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Repair-ClaudeSupervisorContext-Admin.ps1",
+      "sha256": "48c6eefcc0c47a7cdabb13f0ff47d9b1464986956378c24c04a8f3ccd41eb331",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Start-ClaudeLoginBrowser.ps1",
+      "sha256": "d22c72a0a024118d26dbcb7e9adb769637db7fef7e22647035d653f295a08832",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Start-ClaudePro.ps1",
+      "sha256": "e72dcfcdf07fcb04334bed7dc323c8293f3ae274d8401ad41bd7706f2f7c942f",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Start-ClaudeProxy.ps1",
+      "sha256": "8e45d521226faa936ab0c1f9fba3359836cc075f1ba4432d704478c4d42d66d2",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeAcceptanceRegression.ps1",
+      "sha256": "3818c93429739da2e2eea349171a61360f230d530475f880420ed4ecf876ce8f",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeDesktopUpdate.ps1",
+      "sha256": "7260bf59b836631b02eef720dfb79ff7a824168073a94e1b2b8c561dd1d7f92b",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeDesktopUpdateNative.ps1",
+      "sha256": "da5658b3acade80f6d47072cf0a29de3360859e5ec5f76d8610c305529da2dd1",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeDesktopUpdateWindow.ps1",
+      "sha256": "8141119c7dfe4a0e19683bedce1cda95ee4a467a503b7d2e903f193fdebdf19f",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeFirewall.ps1",
+      "sha256": "35b2fd2d35e7893fa705cac9a1dd16a17acf0eec4165de199ebdbfc066c96a21",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeGuard.ps1",
+      "sha256": "fb151cf56e3dd6be8f31f171cc41880ce3c6288ee283ca836cef266947c168b7",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeHardening.ps1",
+      "sha256": "679831094d78940109e646dc51e5bb97b23e72d89b6a2db1ae8e303a333fea34",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeLauncherNative.ps1",
+      "sha256": "cebaf0dae4938663d12245db3a6407209cd3b7c52dea94a4a6d9e02966133a60",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeLifecycle.ps1",
+      "sha256": "685ef34f7c417f5eee8bdbbc89ba58469b4f357f91a76465912d10412c39c439",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeLoginBrowser.ps1",
+      "sha256": "1cf41299e187d3e53cb5f0f513ea713a2ed5fbfe85b3a66b2b922233e0b95d32",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeMaintenance.ps1",
+      "sha256": "4c51221fedbb103e8fae6fc348f7ef5a7ab8bf654e2dd8904517cec3a2e326b9",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeMaintenanceNative.ps1",
+      "sha256": "b2965b063c14d6ae3e4570339393d10a028c420feb9b11f46568e8cd5e972e36",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeMaintenanceUiFixture.ps1",
+      "sha256": "06d5a46c63fa5ba594d8657f2b0d83f88143581005985ae5fafb10f64036c61a",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeProxyFailures.ps1",
+      "sha256": "49f6c65c7f577727204234d629d76930253c6cfa8a8a6cd9b2afa7989bc4c022",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeRecovery.ps1",
+      "sha256": "0318f8aff817fda3a75764a7577c4d9d27aea13b573eb124369a342159b9090a",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeSupervisorDecisions.ps1",
+      "sha256": "c14d9f76eb3149d585cc9887e4083fb5fb3eaea70d8786cef6546c91c8133ee1",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeSupervisorHealth.ps1",
+      "sha256": "1ca157fefd7ea5b485ee02393b9b017e11248fa196b7015607132a664af17f6b",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeSupervisorHost.ps1",
+      "sha256": "ae7756558dd0e823619b48ee30d4d00df92b1a8a8e657e5df8c3d1a580c23d17",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeSupervisorNativeRecovery.ps1",
+      "sha256": "430dbfdb33496abede61dd9f19239b9bb6bfd095687fb5df85a23a2ff4011eac",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeSupervisorRecoveryUI.ps1",
+      "sha256": "679813f0cce06b78f18cb918b1fd3717c4aed52dc6d3ce75cf8a1fb07952452c",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeVersionInfo.ps1",
+      "sha256": "2b814a98103f285d2e6c77d04528ede127657aef0e6dde86f200a3dd7e41a0c5",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeVersionNative.ps1",
+      "sha256": "669fc8e7cab4e4fa786ac1070451f1485e19c09f624264b7fe1524e11777f116",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-ClaudeVersionWindow.ps1",
+      "sha256": "c87a07055c0ca932fb5c834d8ccc917babc88a03c8daca18a307632a4b503476",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Test-CodeRollbackPermissions.ps1",
+      "sha256": "4a79685b7840dc66136aaaac6b3be047d42645137551fedd36b1e0c21c39d5a4",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Update-ClaudeGuard.ps1",
+      "sha256": "ca3e18737dafd24ead7e5810a095c0174a28bdf4e2836e635d2da03b50895bd4",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Watch-ClaudeEnvironmentRead.ps1",
+      "sha256": "93aa35fa5d531fcc68b3c7301c723aa5cc15cdb4638dbba10cbd70b8c159b203",
+      "public_example_substitutions": 0
+    },
+    {
+      "path": "Watch-ClaudeRuntimeEvidence.ps1",
+      "sha256": "6458bbb46b4189c71d58b2fceedfbb6521c2258058bb7170a5463221032e0781",
+      "public_example_substitutions": 0
+    }
+  ]
+}
