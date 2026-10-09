@@ -140,6 +140,15 @@ foreach($failure in @('','firewall','policy','readiness')){
         Require (Test-Path -LiteralPath (Get-GuardPath 'private\safety-hold.json')) ('real-install-'+$failure+'-remains-fail-closed')
     }
 }
+$f=Prepare-FixtureInstall
+$null=Set-GuardMaintenanceOperation $f.Id @{DesktopDownloadId=([guid]::NewGuid().ToString('N'))}
+$null=& (Get-GuardPath 'Update-ClaudeGuard.ps1') -Install -StageFile $f.Stage -StageHash $f.StageHash -ResultFile $f.Result -OperationId $f.Id -ContinueDesktopUpdate
+$continued=Read-GuardMaintenanceOperation $f.Id
+Require ((Read-GuardJson $f.Result).Success -and $continued.Status -eq 'Running' -and $continued.Phase -eq 'PreparingInstall') 'pre-install-maintenance-success-keeps-update-running'
+Require (-not (Get-GuardMaintenanceUiResult $continued).Success -and (Get-GuardMaintenanceUiResult $continued).Pending) 'pre-install-maintenance-does-not-publish-final-success'
+$f=Prepare-FixtureInstall
+$null=& (Get-GuardPath 'Update-ClaudeGuard.ps1') -Install -StageFile $f.Stage -StageHash $f.StageHash -ResultFile $f.Result -OperationId $f.Id -ContinueDesktopUpdate
+Require (-not (Read-GuardJson $f.Result).Success -and $global:MaintenanceFixtureCalls.Count -eq 0) 'ordinary-maintenance-cannot-request-update-continuation'
 $f=Prepare-FixtureInstall;$global:MaintenanceFixtureDisabled=$true;$global:MaintenanceFixtureFailure='firewall'
 $originalTask=Get-GuardPath ('private\upgrade-task-'+$f.Id+'.xml');[IO.File]::WriteAllText($originalTask,'<original-enabled-task/>')
 $null=Set-GuardMaintenanceOperation $f.Id @{DesktopTaskSnapshot=@{Path=$originalTask;Hash=(Get-GuardHash $originalTask);WasEnabled=$true;WasRunning=$true}}
@@ -184,7 +193,8 @@ public class MaintenanceRunner {
  public static void Main(){
   var now=DateTimeOffset.UtcNow;var m=new Claude.MaintenanceResult{SchemaVersion=1,ActionId=new string('a',32),Status="Running",Phase="Migrating",StartedAt=now.AddSeconds(-163).ToString("o"),WorkerPid=1,WorkerStarted=now.AddSeconds(-163).ToString("o")};
   var v=Claude.AssessMaintenance(m,now,true,false);Require(v.Observe&&v.BlockStart&&v.Message.Contains("暂时暂停"),"planned-pause-is-progress");
-  v=Claude.AssessMaintenance(m,now,true,true);Require(v.Held&&!v.Observe,"real-hold-takes-priority");
+  v=Claude.AssessMaintenance(m,now,true,true);Require(v.Observe&&v.BlockStart&&!v.Held,"live-authorized-maintenance-observes-held-recovery");
+  v=Claude.AssessMaintenance(m,now,false,true);Require(v.Held&&!v.Observe,"hold-without-live-maintenance-takes-priority");
   m.WorkerStarted=now.AddSeconds(-601).ToString("o");v=Claude.AssessMaintenance(m,now,true,false);Require(v.Observe&&!v.Recover&&v.Message.Contains("仍在进行"),"live-install-over-budget-is-pending");
   v=Claude.AssessMaintenance(m,now,false,false);Require(v.Recover&&v.BlockStart,"dead-worker-requires-recovery");
   m.Phase="AwaitingAuthorization";m.WorkerPid=0;m.StartedAt=now.ToString("o");v=Claude.AssessMaintenance(m,now,true,false);Require(v.Message.Contains("等待 Windows"),"awaiting-authorization-stage");
@@ -192,7 +202,7 @@ public class MaintenanceRunner {
   m.Status="Completed";v=Claude.AssessMaintenance(m,now,false,false);Require(v.Completed&&!v.BlockStart,"completed-stops-blocking");
   m.Status="Failed";m.Reason="fixture failure";v=Claude.AssessMaintenance(m,now,false,false);Require(v.Failed&&!v.Completed,"failure-stays-distinct-from-health");
   m.RecoveryRequired=true;v=Claude.AssessMaintenance(m,now,false,false);Require(v.Recover&&v.BlockStart,"rollback-failure-blocks-launch");
-  Console.WriteLine("C# maintenance view contract: 9 cases passed");
+  Console.WriteLine("C# maintenance view contract: 10 cases passed");
  }
 }
 '@
@@ -204,7 +214,7 @@ if($LASTEXITCODE){throw 'Maintenance UI compile failed.'}
 & $csc /nologo /reference:System.Windows.Forms.dll /reference:System.Web.Extensions.dll ('/reference:'+$dll) ('/out:'+$exe) $source
 if($LASTEXITCODE){throw 'Maintenance view runner compile failed.'}
 & $exe;if($LASTEXITCODE){throw 'Maintenance view contract failed.'}
-$result=@{Time=(Get-Date -Format o);Passed=$true;FixtureOnly=$true;PowerShellCaseCount=$checks.Count;CSharpCaseCount=9;Checks=@($checks)}
+$result=@{Time=(Get-Date -Format o);Passed=$true;FixtureOnly=$true;PowerShellCaseCount=$checks.Count;CSharpCaseCount=10;Checks=@($checks)}
 Write-GuardJson (Join-Path $project 'evidence\maintenance-fixture-tests.json') $result
 $result|ConvertTo-Json -Depth 4
 }finally{

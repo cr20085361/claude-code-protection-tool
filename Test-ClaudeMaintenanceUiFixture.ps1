@@ -39,7 +39,7 @@ public static class UiFixtureRunner {
    if(step==0){Require(Label().Contains("暂时暂停")&&LabelColor()==Color.FromArgb(145,99,20),"native-planned-pause-is-amber");Require(!Button("打开 Claude").Enabled&&!Button("维护版本").Enabled,"native-maintenance-blocks-duplicate-and-start");window.Close();Open();}
    if(step==1){Require(!File.Exists(Path.Combine(root,"fixture-auto-start.txt"))&&Label().Contains("暂时暂停"),"native-close-reopen-resumes-without-auto-start");Record("Running","Migrating",999999);}
    if(step==2){Require(Label().Contains("维护中断")&&Button("维护版本").Enabled&&!Button("打开 Claude").Enabled,"native-dead-worker-offers-recovery");Record("Running","Migrating",0);Save("private/safety-hold.json",new {Reason="fixture actual hold"});}
-   if(step==3){Require(Label().Contains("网络防护已暂停")&&LabelColor()==Color.FromArgb(163,59,42),"native-real-hold-overrides-maintenance");File.Delete(Path.Combine(root,"private","safety-hold.json"));Healthy();Record("Completed","Completed",0,true);}
+   if(step==3){Require(Label().Contains("暂时暂停")&&LabelColor()==Color.FromArgb(145,99,20)&&!Button("打开 Claude").Enabled,"native-live-maintenance-observes-hold-without-extra-manual-action");File.Delete(Path.Combine(root,"private","safety-hold.json"));Healthy();Record("Completed","Completed",0,true);}
    if(step==4){Require(Label().Contains("版本维护完成")&&Label().Contains("fixture-code")&&LabelColor()==Color.FromArgb(24,106,65),"native-canonical-terminal-and-current-health-show-green");Require(Button("打开 Claude").Enabled,"native-success-enables-protected-start");window.Close();timer.Stop();Application.ExitThread();}
    step++;
   }catch(Exception ex){failure=ex;timer.Stop();if(window!=null)window.Close();Application.ExitThread();}};

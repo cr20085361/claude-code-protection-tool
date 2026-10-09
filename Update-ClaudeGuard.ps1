@@ -1,5 +1,5 @@
 ﻿[CmdletBinding()]
-param([switch]$Install,[string]$StageFile,[string]$StageHash,[string]$ResultFile,[string]$OperationId,[string]$RecoverOperationId)
+param([switch]$Install,[string]$StageFile,[string]$StageHash,[string]$ResultFile,[string]$OperationId,[string]$RecoverOperationId,[switch]$ContinueDesktopUpdate)
 $ErrorActionPreference='Stop'
 Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'ClaudeCodeGate.psm1') -Force
@@ -16,6 +16,7 @@ function Install-SupervisorTask($Candidate,$PreviousState) {
     Register-GuardSupervisorTask -State $Candidate -PreviousState $PreviousState -AllowCreate
 }
 $d=Get-GuardState
+if($ContinueDesktopUpdate -and (-not $Install -or -not $OperationId -or $RecoverOperationId)){throw 'Continuation requires a reviewed desktop-update maintenance stage.'}
 if([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne $d.UserSid){throw 'Maintenance requires the original Windows account.'}
 if($RecoverOperationId) {
     if(-not (Test-GuardAdmin)){throw 'Same-account administrator recovery is required.'}
@@ -57,6 +58,7 @@ if($Install) {
             $op=Read-GuardMaintenanceOperation $OperationId
             $active=Read-GuardMaintenanceOperation
             if(-not $op -or $op.Status -ne 'Running' -or $op.StageId -ne $stage.Id -or $op.StageHash -ne $StageHash -or $op.StageFile -ne $StageFile -or $op.ResultFile -ne $ResultFile -or -not $active -or $active.ActionId -ne $OperationId){throw 'Maintenance operation does not match the reviewed stage.'}
+            if($ContinueDesktopUpdate -and -not (Get-GuardLifecycleValue $op 'DesktopDownloadId')){throw 'Continuation must belong to a desktop update.'}
             $operationClaimed=$true
             $self=[Diagnostics.Process]::GetCurrentProcess()
             $null=Set-GuardMaintenanceOperation $OperationId @{Phase='Migrating';WorkerPid=$PID;WorkerStarted=$self.StartTime.ToUniversalTime().ToString('o');WorkerPath=$self.MainModule.FileName}
@@ -94,8 +96,14 @@ if($Install) {
         $priorRules=Read-GuardJson (Get-GuardPath 'private\firewall.json')
         # 更新链已在 MSIX 安装前暂停守护；回滚必须恢复暂停前的任务状态。
         $desktopTaskRestore=if($OperationId){Get-GuardLifecycleValue (Read-GuardMaintenanceOperation $OperationId) 'DesktopTaskSnapshot'}else{$null}
-        $backupEnabled=(Get-ScheduledTask -TaskName $d.Reliability.TaskName).Settings.Enabled
-        $backupRunning=((Get-ScheduledTask -TaskName $d.Reliability.TaskName).State.ToString() -eq 'Running')
+        $backupEnabled=$false
+        $backupRunning=$false
+        if($d.PSObject.Properties['Reliability']){
+            $existingTask=Get-ScheduledTask -TaskName $d.Reliability.TaskName -ErrorAction Stop
+            Assert-GuardSupervisorTask $existingTask $d
+            $backupEnabled=[bool]$existingTask.Settings.Enabled
+            $backupRunning=($existingTask.State.ToString() -eq 'Running')
+        }
         if($desktopTaskRestore){
             $originalTask=Assert-PrivateFile $desktopTaskRestore.Path '^upgrade-task-[0-9a-f]{32}\.xml$'
             if((Get-GuardHash $originalTask) -ne $desktopTaskRestore.Hash -or $desktopTaskRestore.WasEnabled -isnot [bool] -or $desktopTaskRestore.WasRunning -isnot [bool]){throw 'Original desktop-update task snapshot changed.'}
@@ -189,10 +197,10 @@ if($Install) {
         $result.CompletedAt=[datetime]::UtcNow.ToString('o')
         Write-GuardJson $ResultFile $result
         if($OperationId -and $operationClaimed){
-            $phase=if($result.Success){'Completed'}else{'Failed'}
+            $phase=if($result.Success -and $ContinueDesktopUpdate){'PreparingInstall'}elseif($result.Success){'Completed'}else{'Failed'}
             $kind=if($result.Success){$null}elseif($result.Reason -match 'Exit Claude'){'UnprotectedInstance'}else{'MaintenanceFailed'}
             $message=if($kind -eq 'UnprotectedInstance'){'请完全退出 Claude 和本地 Code 后再点击“维护版本”。'}elseif($result.Reason){'版本维护失败：'+$result.Reason}else{$null}
-            $null=Set-GuardMaintenanceOperation $OperationId @{Status=$phase;Phase=$phase;Reason=$message;FailureKind=$kind;RecoveryRequired=[bool]$result.RollbackError;RollbackRestored=$result.RollbackRestored}
+            $null=Set-GuardMaintenanceOperation $OperationId @{Status=$(if($result.Success -and $ContinueDesktopUpdate){'Running'}else{$phase});Phase=$phase;Reason=$message;FailureKind=$kind;RecoveryRequired=[bool]$result.RollbackError;RollbackRestored=$result.RollbackRestored}
         }
         $marker=Get-GuardPath 'private\maintenance.json'
         if(Test-Path -LiteralPath $marker){$m=Read-GuardJson $marker;if((Get-GuardLifecycleValue $m 'StageId') -eq $result.StageId -and -not $result.RollbackError){Remove-Item -LiteralPath $marker}}

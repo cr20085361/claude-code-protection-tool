@@ -5,8 +5,8 @@
     "recorded_at": "2026-10-01T12:03:55+08:00",
     "version_source": null
   },
-  "current_version": "v1.3.0",
-  "completed_iterations": 6,
+  "current_version": "v1.3.2",
+  "completed_iterations": 8,
   "history": [
     {
       "id": "1ed80264-8644-40fd-a830-3d725048fa07",
@@ -61,6 +61,24 @@
       "summary": "修复主按钮上沿遮挡，新增官方 Desktop 及配套 Code 下载核验、同账号安装与维护接续、关闭重开和异常恢复",
       "verification": "49 isolated update-chain cases; 66 native window and equivalent scaling cases; 37 maintenance PowerShell plus 9 CSharp contracts; 7 maintenance window and 11 version window cases; 22 health and 28 lifecycle cases; actual installed launcher Start/Check/Close/Reopen and official 293331146-byte MSIX download with download-close-reopen, signature and paired Code cache verification PASS; same-version reinstall disabled; 10 protected hashes, core guardian/runtime and system proxy unchanged; parsers and x64 build PASS. Real higher-version MSIX installation, new Code session/TCP, sleep/relogin/long-run/cross-machine DPI NOT_RUN.",
       "recorded_at": "2026-10-08T17:29:31+08:00"
+    },
+    {
+      "id": "a854e56a-7c35-4759-9e15-e4bdf285f5b1",
+      "from_version": "v1.3.0",
+      "to_version": "v1.3.1",
+      "level": "patch",
+      "summary": "修复MSIX资源占用安装失败：Windows目标包关闭、授权后退出复查、已确认未变基线恢复及保留官方包重试，旧失败记录维护后复用，保留安装诊断",
+      "verification": "67 isolated update cases; 66 window cases; maintenance 37 PS + 9 CSharp; lifecycle 28; health 22 paired PS/CSharp; real signed 294299510-byte Desktop 2.31226.0.0 package and paired Code 2.1.293 cache reverified; 6 protected file hashes and system proxy unchanged; PS parser and diff checks PASS. Live recovery ADMINISTRATOR_CANCELLED; higher-version installation and post-update session NOT_RUN.",
+      "recorded_at": "2026-10-09T11:49:14.5266182+08:00"
+    },
+    {
+      "id": "ea50c505-ab08-4e46-ae80-5010620c2502",
+      "from_version": "v1.3.1",
+      "to_version": "v1.3.2",
+      "level": "patch",
+      "summary": "合并一次安装操作：自动前维护、MSIX安装及后维护核验；修复客户端退出后的过期已打开按钮和成功提示，安装期间显示更新进行中",
+      "verification": "92 update cases; 79 native UI and real isolated process cases; maintenance 40 PS + 10 CSharp; 7 maintenance windows; 11 version windows; 22 paired health cases; x64 compilation and PS parsers PASS. Existing real Desktop 2.31226.0.0 update completed and guardian ready; launcher hot-replaced with client sessions retained. New combined pre-maintenance plus higher-version MSIX end-to-end NOT_RUN because current target is already installed.",
+      "recorded_at": "2026-10-09T12:20:41.7472960+08:00"
     }
   ]
 }

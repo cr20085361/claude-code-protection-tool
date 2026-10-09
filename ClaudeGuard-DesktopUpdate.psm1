@@ -20,7 +20,7 @@ function Read-ClaudeDesktopUpdate([string]$Root,[string]$Id='') {
     $op=Read-GuardJson $path
     if($op.SchemaVersion -ne 1 -or $op.Id -notmatch '^[a-f0-9]{32}$' -or ($Id -and $op.Id -ne $Id)){throw '更新状态身份无效。'}
     if(-not $Id){$canonical=Get-ClaudeDesktopUpdateArtifact $Root $op.Id;if(Test-Path -LiteralPath $canonical){$op=Read-GuardJson $canonical;if($op.SchemaVersion -ne 1 -or $op.Id -ne [IO.Path]::GetFileNameWithoutExtension($canonical).Substring(15)){throw '更新状态关联无效。'}}}
-    if($op.Status -notin @('Downloading','Verifying','PreparingInstall','Ready','AwaitingAuthorization','Installing','Maintaining','AwaitingReadiness','Completed','Failed','Interrupted') -or $op.PackageFile -ne (Get-ClaudeDesktopUpdateArtifact $Root $op.Id 'Package')){throw '更新阶段或安装包路径无效。'}
+    if($op.Status -notin @('Downloading','Verifying','PreparingInstall','PreparingProtection','Ready','AwaitingAuthorization','Installing','Maintaining','AwaitingReadiness','Completed','Failed','Interrupted') -or $op.PackageFile -ne (Get-ClaudeDesktopUpdateArtifact $Root $op.Id 'Package')){throw '更新阶段或安装包路径无效。'}
     $op
 }
 function Set-ClaudeDesktopUpdate([string]$Root,[string]$Id,[Collections.IDictionary]$Changes) {
@@ -37,7 +37,7 @@ function Set-ClaudeDesktopUpdate([string]$Root,[string]$Id,[Collections.IDiction
 function New-ClaudeDesktopUpdate([string]$Root,[string]$Id,$Release) {
     Invoke-ClaudeDesktopUpdateLocked {
         $old=Get-ClaudeDesktopUpdateSnapshot $Root
-        if($old -and ($old.Status -in @('Downloading','Verifying','PreparingInstall','AwaitingAuthorization','Installing','Maintaining','AwaitingReadiness') -or ($old.Status -eq 'Interrupted' -and $old.MaintenanceId))){throw '已有更新正在进行或等待恢复，请接续原操作。'}
+        if($old -and ($old.Status -in @('Downloading','Verifying','PreparingInstall','PreparingProtection','AwaitingAuthorization','Installing','Maintaining','AwaitingReadiness') -or ($old.Status -eq 'Interrupted' -and $old.MaintenanceId))){throw '已有更新正在进行或等待恢复，请接续原操作。'}
         $self=[Diagnostics.Process]::GetCurrentProcess()
         $op=[ordered]@{SchemaVersion=1;Id=$Id;Status='Downloading';Phase='Downloading';StartedAt=[datetimeoffset]::UtcNow.ToString('o');UpdatedAt=[datetimeoffset]::UtcNow.ToString('o');CompletedAt=$null;WorkerPid=$PID;WorkerStarted=$self.StartTime.ToUniversalTime().ToString('o');WorkerPath=$self.MainModule.FileName;TargetVersion=$Release.LatestDesktopVersion;DownloadUrl=$Release.DownloadUrl;PackageFile=(Get-ClaudeDesktopUpdateArtifact $Root $Id 'Package');PackageHash=$null;PackageBytes=0;CodeVersion=$null;Publisher=$null;Signature=$null;MaintenanceId=$null;FailureKind=$null;Message='正在下载官方安装包，可继续使用当前 Claude。'}
         Write-GuardJson (Get-ClaudeDesktopUpdateArtifact $Root $Id) $op
@@ -47,7 +47,12 @@ function New-ClaudeDesktopUpdate([string]$Root,[string]$Id,$Release) {
 }
 function Get-ClaudeDesktopUpdateSnapshot([string]$Root) {
     $op=Read-ClaudeDesktopUpdate $Root;if(-not $op){return $null}
-    if($op.MaintenanceId -and $op.Status -in @('AwaitingAuthorization','Installing','Maintaining','Interrupted','AwaitingReadiness')){
+    # 兼容旧入口的 0x80073D02 失败记录。完成新的受控维护后重新核验旧下载，
+    # 而非将旧“失败”状态永久锁死或要求重复下载。
+    if($op.Status -eq 'Failed' -and $op.FailureKind -eq 'DesktopUpdateFailed' -and $op.Message -match '(?i)0x80073D02'){
+        try{$op=Resume-ClaudeDesktopUpdateVerifiedPackage $Root $op}catch{}
+    }
+    if($op.MaintenanceId -and $op.Status -in @('AwaitingAuthorization','PreparingProtection','Installing','Maintaining','Interrupted','AwaitingReadiness')){
         $m=Read-GuardMaintenanceOperation $op.MaintenanceId
         if($m -and $m.Status -eq 'Completed'){
             $r=Get-GuardMaintenanceUiResult $m
@@ -59,7 +64,7 @@ function Get-ClaudeDesktopUpdateSnapshot([string]$Root) {
             $op=Set-ClaudeDesktopUpdate $Root $op.Id @{Status='Interrupted';Phase='Interrupted';FailureKind='MaintenanceInterrupted';Message='更新中断，需要同账号管理员恢复。请点击“维护版本”。'}
         }
     }
-    if($op.Status -in @('Downloading','Verifying','PreparingInstall','AwaitingAuthorization','Installing','Maintaining') -and -not (Test-GuardMaintenanceProcess $op.WorkerPid $op.WorkerStarted $op.WorkerPath)){
+    if($op.Status -in @('Downloading','Verifying','PreparingInstall','PreparingProtection','AwaitingAuthorization','Installing','Maintaining') -and -not (Test-GuardMaintenanceProcess $op.WorkerPid $op.WorkerStarted $op.WorkerPath)){
         if($op.Status -eq 'PreparingInstall' -and -not $op.MaintenanceId){$op=Set-ClaudeDesktopUpdate $Root $op.Id @{Status='Ready';Phase='Ready';FailureKind='InstallPrecondition';Message='安装准备已中止，已核验安装包保留，可重试。'}}
         else{$op=Set-ClaudeDesktopUpdate $Root $op.Id @{Status='Interrupted';Phase='Interrupted';FailureKind='UpdateInterrupted';Message=$(if($op.MaintenanceId){'更新中断，需要恢复。请点击“维护版本”。'}else{'下载已中断，可重新下载；未改变已安装版本。'})}}
     }
@@ -180,17 +185,23 @@ function Start-ClaudeDesktopUpdateDownload([string]$Root,[string]$Id) {
 function Assert-ClaudeDesktopUpdateClientsExited {
     if(@(Get-CimInstance Win32_Process|Where-Object {$_.Name -ieq 'claude.exe'}).Count){throw '请完全退出 Claude 和本地 Code，再点击“安装并维护”。'}
 }
+function Test-ClaudeDesktopUpdatePreparationRequired {
+    # 自动维护仍须遵守原账号、代理策略和核心文件边界。
+    Assert-GuardPolicy;Assert-GuardCore
+    try{Assert-ClaudeDesktopUpdateProtectionReady;return $false}catch{return $true}
+}
 function New-ClaudeDesktopUpdateRequest([string]$Root,[string]$Id) {
     $op=Invoke-ClaudeDesktopUpdateLocked {
         $ready=Read-ClaudeDesktopUpdate $Root $Id
-        if(-not $ready -or $ready.Status -ne 'Ready'){throw '请先下载并核验官方安装包，或等待已有安装准备完成。'}
+        $retry=$ready -and $ready.Status -eq 'Failed' -and $ready.FailureKind -in @('DesktopUpdateFailed','PackageResourcesInUse','InstallPrecondition') -and $ready.Signature -eq 'Valid' -and $ready.PackageHash -match '^[A-Fa-f0-9]{64}$'
+        if(-not $ready -or ($ready.Status -ne 'Ready' -and -not $retry)){throw '请先下载并核验官方安装包，或等待已有安装准备完成。'}
         $self=[Diagnostics.Process]::GetCurrentProcess()
         Set-ClaudeDesktopUpdate $Root $Id @{Status='PreparingInstall';Phase='PreparingInstall';WorkerPid=$PID;WorkerStarted=$self.StartTime.ToUniversalTime().ToString('o');WorkerPath=$self.MainModule.FileName;Message='正在核对退出状态及安装条件，请等待。';FailureKind=$null}
     }
     $claimed=$null
     try{
     Assert-ClaudeDesktopUpdateClientsExited
-    Assert-ClaudeDesktopUpdateProtectionReady
+    $prepare=Test-ClaudeDesktopUpdatePreparationRequired
     $current=Get-GuardDesktop
     if((ConvertTo-ClaudeVersion $op.TargetVersion) -le (ConvertTo-ClaudeVersion $current.Version)){throw '当前安装版本无需升级，已拒绝重装或降级。'}
     $package=Assert-ClaudeDesktopUpdatePackage $Root $op.PackageFile $op.TargetVersion $op.PackageHash
@@ -201,13 +212,14 @@ function New-ClaudeDesktopUpdateRequest([string]$Root,[string]$Id) {
     $files=@('ClaudeGuard-DesktopUpdate.psm1','Invoke-ClaudeDesktopUpdate.ps1','ClaudeGuard-VersionInfo.psm1','Read-DesktopCodeManifest.cjs','Expand-VerifiedCode.cjs','Update-ClaudeGuard.ps1','ClaudeGuard.psm1','ClaudeGuard-Lifecycle.ps1','ClaudeGuard-Health.ps1','ClaudeCodeGate.psm1','runtime\ClaudeProGuard.exe')
     $request=[ordered]@{SchemaVersion=1;Id=$maintenanceId;DownloadId=$Id;CreatedAt=[datetimeoffset]::UtcNow.ToString('o');UserSid=$state.UserSid;BaselineHash=(Get-GuardHash (Join-Path $Root 'private\deployment.json'));PackageFile=$op.PackageFile;PackageHash=$package.Hash;TargetVersion=$package.Version;CodeVersion=$package.CodeVersion;CodePayloadHash=$op.CodePayloadHash;Publisher=$package.Publisher;Scripts=@($files|ForEach-Object {@{Name=$_;Hash=(Get-GuardHash (Join-Path $Root $_))}})}
     $path=Get-ClaudeDesktopUpdateArtifact $Root $maintenanceId 'Request'
+    $request.AutoPrepare=$true;$request.PreparationRequired=$prepare
     Write-GuardJson $path $request
     $null=New-GuardMaintenanceOperation $maintenanceId
     $claimed=$maintenanceId
     Register-GuardUiAction $maintenanceId 'Update';Set-GuardUiMaintenanceBinding $maintenanceId $maintenanceId
     $null=Set-GuardMaintenanceOperation $maintenanceId @{Phase='AwaitingAuthorization';DesktopDownloadId=$Id}
     $self=[Diagnostics.Process]::GetCurrentProcess()
-    $null=Set-ClaudeDesktopUpdate $Root $Id @{Status='AwaitingAuthorization';Phase='AwaitingAuthorization';MaintenanceId=$maintenanceId;WorkerPid=$PID;WorkerStarted=$self.StartTime.ToUniversalTime().ToString('o');WorkerPath=$self.MainModule.FileName;Message='等待同账号 Windows 管理员授权，安装后将接续版本维护。'}
+    $null=Set-ClaudeDesktopUpdate $Root $Id @{Status='AwaitingAuthorization';Phase='AwaitingAuthorization';MaintenanceId=$maintenanceId;WorkerPid=$PID;WorkerStarted=$self.StartTime.ToUniversalTime().ToString('o');WorkerPath=$self.MainModule.FileName;Message='等待同账号 Windows 管理员授权；之后自动完成必要维护、安装和防护核验。'}
     [pscustomobject]@{Path=$path;Hash=(Get-GuardHash $path);Request=[pscustomobject]$request}
     }catch{
         if($claimed){$null=Set-GuardMaintenanceOperation $claimed @{Status='Failed';Phase='Failed';FailureKind='InstallPrecondition';Reason=$_.Exception.Message}}
@@ -232,7 +244,45 @@ function Assert-ClaudeDesktopUpdateRequest([string]$Root,[string]$Id,[string]$Ha
     Assert-ClaudeDesktopUpdateCodeCache $Root $package $r.CodePayloadHash
     $r
 }
-function Invoke-ClaudeDesktopUpdateNativeInstall([string]$Path){Add-AppxPackage -Path $Path -ErrorAction Stop}
+function Invoke-ClaudeDesktopUpdateNativeInstall([string]$Path){
+    # 主窗口退出后，MSIX 仍可能有后台服务/包活动。由 Windows 只关闭目标包，
+    # 避免按进程名结束其他程序，也不能用延迟注册冒充安装完成。
+    Add-AppxPackage -Path $Path -ForceTargetApplicationShutdown -ErrorAction Stop
+}
+function Get-ClaudeDesktopUpdateInstallFailure([Management.Automation.ErrorRecord]$Record) {
+    $detail=$Record.Exception.Message
+    if($Record.ErrorDetails -and $Record.ErrorDetails.Message){$detail+="`n"+$Record.ErrorDetails.Message}
+    $inUse=$detail -match '(?i)0x80073D02'
+    $exception=$Record.Exception
+    while($exception){
+        if($exception.HResult -eq -2147009278){$inUse=$true}
+        $exception=$exception.InnerException
+    }
+    $activity=[regex]::Match($detail,'(?i)(?:\[ActivityId\]|-ActivityID)\s*([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})')
+    [pscustomobject]@{ResourcesInUse=$inUse;ErrorCode=$(if($inUse){'0x80073D02'}else{$null});ActivityId=$(if($activity.Success){$activity.Groups[1].Value}else{$null});Detail=$detail}
+}
+function Test-ClaudeDesktopUpdateBaselineUnchanged([string]$Root,$Request) {
+    if((Get-GuardHash (Join-Path $Root 'private\deployment.json')) -ne $Request.BaselineHash){return $false}
+    $before=(Get-GuardState).Desktop;$actual=Get-GuardDesktop
+    foreach($key in @('Version','Path','Hash','Family')){
+        if(-not $before.PSObject.Properties[$key] -or -not $actual.PSObject.Properties[$key] -or -not $before.$key -or $before.$key -ne $actual.$key){return $false}
+    }
+    $true
+}
+function Resume-ClaudeDesktopUpdateVerifiedPackage([string]$Root,$Operation) {
+    $maintenance=Get-GuardMaintenanceSnapshot
+    if($maintenance.Active -or $maintenance.Interrupted -or -not $maintenance.Operation -or $maintenance.Operation.Status -ne 'Completed' -or -not (Get-GuardMaintenanceUiResult $maintenance.Operation).Success){return $Operation}
+    Assert-ClaudeDesktopUpdateProtectionReady
+    $baseline=[pscustomobject]@{BaselineHash=(Get-GuardHash (Join-Path $Root 'private\deployment.json'))}
+    if(-not (Test-ClaudeDesktopUpdateBaselineUnchanged $Root $baseline) -or (ConvertTo-ClaudeVersion $Operation.TargetVersion) -le (ConvertTo-ClaudeVersion (Get-GuardDesktop).Version)){return $Operation}
+    $package=Assert-ClaudeDesktopUpdatePackage $Root $Operation.PackageFile $Operation.TargetVersion $Operation.PackageHash
+    Assert-ClaudeDesktopUpdateCodeCache $Root $package $Operation.CodePayloadHash
+    Invoke-ClaudeDesktopUpdateLocked {
+        $current=Read-ClaudeDesktopUpdate $Root $Operation.Id
+        if($current.Status -ne 'Failed' -or $current.UpdatedAt -ne $Operation.UpdatedAt -or -not (Test-ClaudeDesktopUpdateBaselineUnchanged $Root $baseline)){return $current}
+        Set-ClaudeDesktopUpdate $Root $Operation.Id @{Status='Ready';Phase='Ready';MaintenanceId=$null;FailureKind='PackageResourcesInUse';Message='上次安装因 Claude 后台资源占用失败。当前版本维护已完成，原官方包及配套 Code 已重新核验；完全退出 Claude 和本地 Code 后可点击“安装并维护”重试。';CompletedAt=$null}
+    }
+}
 function Save-ClaudeDesktopUpdateRollback([string]$Root,[string]$Id,$State) {
     $task=Get-ScheduledTask -TaskName $State.Reliability.TaskName
     Assert-GuardSupervisorTask $task $State
@@ -244,7 +294,7 @@ function Save-ClaudeDesktopUpdateRollback([string]$Root,[string]$Id,$State) {
     $null=Set-GuardMaintenanceOperation $Id @{BackupFile=$backupPath;BackupHash=(Get-GuardHash $backupPath);TaskBackup=$taskPath;TaskBackupHash=$restore.Hash;DesktopTaskSnapshot=$restore;SupervisorSuspended=$true}
     $null=Suspend-GuardSupervisorTask -State $State -TimeoutSeconds 30
 }
-function Invoke-ClaudeDesktopUpdateMaintenance([string]$Root,[string]$Id) {
+function Invoke-ClaudeDesktopUpdateMaintenance([string]$Root,[string]$Id,[switch]$BeforeInstall) {
     $self=[Diagnostics.Process]::GetCurrentProcess()
     $null=Set-GuardMaintenanceOperation $Id @{Phase='Preparing';CoordinatorPid=$PID;CoordinatorStarted=$self.StartTime.ToUniversalTime().ToString('o');CoordinatorPath=$self.MainModule.FileName}
     $text=& (Join-Path $Root 'Update-ClaudeGuard.ps1') -OperationId $Id
@@ -253,35 +303,72 @@ function Invoke-ClaudeDesktopUpdateMaintenance([string]$Root,[string]$Id) {
     $result=Join-Path $Root ('private\upgrade-result-'+[guid]::NewGuid().ToString('N')+'.json')
     $stageId=(Read-GuardJson $stage.StageFile).Id
     $null=Set-GuardMaintenanceOperation $Id @{Phase='AwaitingAuthorization';StageId=$stageId;StageFile=$stage.StageFile;StageHash=$stage.StageHash;ResultFile=$result}
-    & (Join-Path $Root 'Update-ClaudeGuard.ps1') -Install -StageFile $stage.StageFile -StageHash $stage.StageHash -ResultFile $result -OperationId $Id
+    & (Join-Path $Root 'Update-ClaudeGuard.ps1') -Install -StageFile $stage.StageFile -StageHash $stage.StageHash -ResultFile $result -OperationId $Id -ContinueDesktopUpdate:$BeforeInstall
     $m=Read-GuardMaintenanceOperation $Id
+    if($BeforeInstall){
+        $migration=Read-GuardJson $result
+        $state=Get-GuardState
+        if(-not $migration.Success -or $migration.ActionId -ne $Id -or $migration.StageId -ne $stageId -or $migration.DesktopVersion -ne $state.Desktop.Version -or $migration.CodeVersion -ne $state.CodeGate.Version -or $m.Status -ne 'Running'){throw '安装前自动维护未完成，安装尚未执行。'}
+        Assert-ClaudeDesktopUpdateProtectionReady
+        $null=Set-GuardMaintenanceOperation $Id @{Phase='PreparingInstall';PreparationResultFile=$result;StageId=$null;StageFile=$null;StageHash=$null;ResultFile=$null;BackupFile=$null;BackupHash=$null;TaskBackup=$null;TaskBackupHash=$null;ProxyBackup=$null;ProxyBackupHash=$null;DesktopTaskSnapshot=$null;SupervisorSuspended=$false;BaselineChanged=$false}
+        return
+    }
     if($m.Status -ne 'Completed' -or -not (Get-GuardMaintenanceUiResult $m).Success){throw '安装后维护尚未成功完成。'}
 }
 function Invoke-ClaudeDesktopUpdateInstallation([string]$Root,[string]$Id,[string]$RequestHash) {
     if(-not (Test-GuardAdmin)){throw '需要同账号管理员授权。'}
     $r=Assert-ClaudeDesktopUpdateRequest $Root $Id $RequestHash
-    Assert-ClaudeDesktopUpdateClientsExited
-    Assert-ClaudeDesktopUpdateProtectionReady
-    if((ConvertTo-ClaudeVersion $r.TargetVersion) -le (ConvertTo-ClaudeVersion (Get-GuardDesktop).Version)){throw '安装前版本已变化，拒绝重装或降级。'}
-    $mutex=Get-GuardMaintenanceLock 'Install';$held=$false;$suspended=$false
+    $mutex=Get-GuardMaintenanceLock 'Install';$held=$false;$suspended=$false;$migrationStarted=$false
+    $installBaseline=$r
     try{
         try{$held=$mutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$held=$true};if(-not $held){throw '已有安装进程正在运行。'}
         $self=[Diagnostics.Process]::GetCurrentProcess()
         $null=Set-GuardMaintenanceOperation $Id @{WorkerPid=$PID;WorkerStarted=$self.StartTime.ToUniversalTime().ToString('o');WorkerPath=$self.MainModule.FileName;Phase='Migrating'}
+        Assert-ClaudeDesktopUpdateClientsExited
+        if((ConvertTo-ClaudeVersion $r.TargetVersion) -le (ConvertTo-ClaudeVersion (Get-GuardDesktop).Version)){throw '安装前版本已变化，拒绝重装或降级。'}
+        if(Test-ClaudeDesktopUpdatePreparationRequired){
+            if(-not (Get-GuardLifecycleValue $r 'AutoPrepare' $false)){throw '安装前防护需要维护，请重新发起安装。'}
+            $null=Set-ClaudeDesktopUpdate $Root $r.DownloadId @{Status='PreparingProtection';Phase='PreparingProtection';WorkerPid=$PID;WorkerStarted=$self.StartTime.ToUniversalTime().ToString('o');WorkerPath=$self.MainModule.FileName;Message='正在自动恢复并核验安装前防护，完成后直接安装，请等待。'}
+            Invoke-ClaudeDesktopUpdateMaintenance $Root $Id -BeforeInstall
+            $installBaseline=[pscustomobject]@{BaselineHash=(Get-GuardHash (Join-Path $Root 'private\deployment.json'))}
+            foreach($s in $r.Scripts){if((Get-GuardHash (Join-Path $Root $s.Name)) -ne $s.Hash){throw '自动维护期间更新脚本发生变化。'}}
+            $package=Assert-ClaudeDesktopUpdatePackage $Root $r.PackageFile $r.TargetVersion $r.PackageHash
+            Assert-ClaudeDesktopUpdateCodeCache $Root $package $r.CodePayloadHash
+            Assert-ClaudeDesktopUpdateClientsExited
+            if((ConvertTo-ClaudeVersion $r.TargetVersion) -le (ConvertTo-ClaudeVersion (Get-GuardDesktop).Version)){throw '自动维护后版本已变化，拒绝重装或降级。'}
+        }
+        Assert-ClaudeDesktopUpdateProtectionReady
         $null=Set-ClaudeDesktopUpdate $Root $r.DownloadId @{Status='Installing';Phase='Installing';WorkerPid=$PID;WorkerStarted=$self.StartTime.ToUniversalTime().ToString('o');WorkerPath=$self.MainModule.FileName;Message='正在安装官方客户端，后台守护暂时暂停。'}
         $suspended=$true;Save-ClaudeDesktopUpdateRollback $Root $Id (Get-GuardState)
+        # 授权与暂停守护期间可能又启动客户端，安装前重新检查活动会话。
+        Assert-ClaudeDesktopUpdateClientsExited
         $null=Set-GuardMaintenanceOperation $Id @{BaselineChanged=$true}
         Invoke-ClaudeDesktopUpdateNativeInstall $r.PackageFile
         $actual=Get-GuardDesktop
         if((ConvertTo-ClaudeVersion $actual.Version) -ne (ConvertTo-ClaudeVersion $r.TargetVersion) -or $actual.Family -ne (Get-GuardState).Desktop.Family){throw '安装后实际包身份或版本不一致。'}
         $null=Set-ClaudeDesktopUpdate $Root $r.DownloadId @{Status='Maintaining';Phase='Maintaining';Message='客户端已安装，正在迁移并核验版本防护。'}
+        $migrationStarted=$true
         Invoke-ClaudeDesktopUpdateMaintenance $Root $Id
         $null=Set-ClaudeDesktopUpdate $Root $r.DownloadId @{Status='Completed';Phase='Completed';CompletedAt=[datetimeoffset]::UtcNow.ToString('o');Message='更新安装与版本维护完成，后台守护已核验。';FailureKind=$null}
     }catch{
-        $reason=$_.Exception.Message;$restored=$false
+        $failure=Get-ClaudeDesktopUpdateInstallFailure $_;$reason=$failure.Detail;$restored=$false;$unchanged=$false
+        $prior=Read-GuardMaintenanceOperation $Id
+        $existingRecovery=[bool](Get-GuardLifecycleValue $prior 'RecoveryRequired' $false)
+        if(-not $suspended){$restored=[bool](Get-GuardLifecycleValue $prior 'RollbackRestored' $false)}
+        # 安装结果未知时仍保留保守暂停；只有程序身份、哈希和防护基线均未变
+        # 才撤销“基线变化”标记，防止资源占用失败造成不必要的永久安全暂停。
+        if(-not $migrationStarted){try{$unchanged=Test-ClaudeDesktopUpdateBaselineUnchanged $Root $installBaseline}catch{}}
+        if($unchanged -and -not $existingRecovery){$null=Set-GuardMaintenanceOperation $Id @{BaselineChanged=$false} -Recovery}
         if($suspended){try{Restore-GuardMaintenanceBackup (Read-GuardMaintenanceOperation $Id);$restored=$true}catch{}}
-        $null=Set-GuardMaintenanceOperation $Id @{Status=$(if($suspended -and -not $restored){'Interrupted'}else{'Failed'});Phase=$(if($suspended -and -not $restored){'Interrupted'}else{'Failed'});RecoveryRequired=($suspended -and -not $restored);RollbackRestored=$restored;FailureKind='DesktopUpdateFailed';Reason=('更新未完成：'+$reason+' 安装状态与防护需重新核验。')} -Recovery
-        $null=Set-ClaudeDesktopUpdate $Root $r.DownloadId @{Status=$(if($suspended -and -not $restored){'Interrupted'}else{'Failed'});Phase='Failed';FailureKind='DesktopUpdateFailed';Message=('更新未完成：'+$reason+' 请点击“维护版本”恢复或重新核验。');CompletedAt=[datetimeoffset]::UtcNow.ToString('o')}
+        $needsRecovery=$existingRecovery -or ($suspended -and -not $restored)
+        $retry=$failure.ResourcesInUse -and $unchanged -and $restored -and -not $needsRecovery
+        $kind=if($failure.ResourcesInUse){'PackageResourcesInUse'}else{'DesktopUpdateFailed'}
+        $message=if($retry){'Windows 仍报告 Claude 后台资源占用（0x80073D02）。旧版及防护已恢复，官方包已保留；完全退出 Claude 和本地 Code 后可再次点击“安装并维护”。'}else{'更新未完成：'+$reason+' 请点击“维护版本”恢复或重新核验。'}
+        if($retry -and $failure.ActivityId){$message+=' 诊断 ID：'+$failure.ActivityId}
+        $status=if($needsRecovery){'Interrupted'}else{'Failed'}
+        $null=Set-GuardMaintenanceOperation $Id @{Status=$status;Phase=$status;RecoveryRequired=$needsRecovery;RollbackRestored=$restored;FailureKind=$kind;Reason=$message;InstallerErrorCode=$failure.ErrorCode;InstallerActivityId=$failure.ActivityId;InstallerErrorDetail=$failure.Detail} -Recovery
+        $updateStatus=if($retry){'Ready'}else{$status}
+        $null=Set-ClaudeDesktopUpdate $Root $r.DownloadId @{Status=$updateStatus;Phase=$updateStatus;FailureKind=$kind;Message=$message;CompletedAt=[datetimeoffset]::UtcNow.ToString('o');InstallerErrorCode=$failure.ErrorCode;InstallerActivityId=$failure.ActivityId}
         throw
     }finally{if($held){$mutex.ReleaseMutex()};$mutex.Dispose()}
 }

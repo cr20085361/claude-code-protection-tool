@@ -42,6 +42,7 @@ public sealed class ClaudeGuardWindow : Form {
     bool officialDownloadReady;
     string installedDesktopVersion;
     string desktopCommandError;
+    bool? lastDesktopOpen;
     readonly System.Windows.Forms.Timer versionTimer = new System.Windows.Forms.Timer();
     bool versionBusy;
     DateTimeOffset nextCatalogCheck=DateTimeOffset.MinValue;
@@ -105,7 +106,7 @@ public sealed class ClaudeGuardWindow : Form {
         entryVersion.SetBounds(26,468,608,22);entryVersion.Font=new Font("Microsoft YaHei UI",8);entryVersion.ForeColor=Color.FromArgb(90,99,110);
         entryVersion.Text="入口运行时每 6 小时检查新版，由你决定何时更新。";
         Controls.AddRange(new Control[]{divider,installedVersions,runtimeVersions,updateStatus,checkUpdates,downloadStatus,downloadUpdates,installUpdates,entryVersion});
-        healthTimer.Interval=2000;healthTimer.Tick+=delegate { RefreshNetworkHealth();RefreshDesktopUpdate(); };healthTimer.Start();
+        healthTimer.Interval=2000;healthTimer.Tick+=delegate { RefreshClientState();RefreshNetworkHealth();RefreshDesktopUpdate(); };healthTimer.Start();
         versionTimer.Interval=10000;versionTimer.Tick+=async delegate {if(!PreviewOnly)await RefreshVersionInfo(false,DateTimeOffset.UtcNow>=nextCatalogCheck);};versionTimer.Start();
         FormClosed+=delegate {healthTimer.Stop();healthTimer.Dispose();versionTimer.Stop();versionTimer.Dispose();};
         var iconPath=Path.Combine(root,"runtime","claude-guard.ico"); if(File.Exists(iconPath)) Icon=new Icon(iconPath);
@@ -155,23 +156,34 @@ public sealed class ClaudeGuardWindow : Form {
         if(d.Status=="Downloading" && File.Exists(d.PackageFile+".part"))d.PackageBytes=new FileInfo(d.PackageFile+".part").Length;
         return d;
     }
-    static bool IsDesktopUpdateActive(DesktopUpdateResult d){return d!=null && (d.Status=="Downloading" || d.Status=="Verifying" || d.Status=="PreparingInstall" || d.Status=="AwaitingAuthorization" || d.Status=="Installing" || d.Status=="Maintaining" || d.Status=="AwaitingReadiness");}
+    static bool IsDesktopUpdateActive(DesktopUpdateResult d){return d!=null && (d.Status=="Downloading" || d.Status=="Verifying" || IsDesktopInstallationActive(d));}
+    static bool IsDesktopInstallationActive(DesktopUpdateResult d){return d!=null && (d.Status=="PreparingInstall" || d.Status=="PreparingProtection" || d.Status=="AwaitingAuthorization" || d.Status=="Installing" || d.Status=="Maintaining" || d.Status=="AwaitingReadiness");}
+    static bool IsDesktopUpdateRetryable(DesktopUpdateResult d){return d!=null && (d.Status=="Ready" || (d.Status=="Failed" && (d.FailureKind=="DesktopUpdateFailed" || d.FailureKind=="PackageResourcesInUse" || d.FailureKind=="InstallPrecondition") && d.Signature=="Valid" && d.PackageHash!=null && System.Text.RegularExpressions.Regex.IsMatch(d.PackageHash,"\\A[A-Fa-f0-9]{64}\\z")));}
     bool ResumeDesktopUpdateOnOpen(){try{var d=ReadDesktopUpdate();RefreshDesktopUpdate();return d!=null && (d.Status=="PreparingInstall" || (!String.IsNullOrEmpty(d.MaintenanceId) && (IsDesktopUpdateActive(d) || d.Status=="Interrupted")));}catch{status.Text="更新记录暂时无法确认，请查看说明并恢复维护。";return true;}}
     public void RenderDesktopUpdate(DesktopUpdateResult d) {
         bool active=IsDesktopUpdateActive(d);bool repair=d!=null && d.Status=="Interrupted" && !String.IsNullOrEmpty(d.MaintenanceId);
         downloadUpdates.Enabled=!updateDispatchBusy && officialDownloadReady && !active && !repair && maintenance.Enabled && check.Enabled;
         Version target,current;bool newer=d!=null && Version.TryParse(d.TargetVersion,out target) && Version.TryParse(installedDesktopVersion,out current) && new Version(target.Major,target.Minor,target.Build,Math.Max(0,target.Revision))>new Version(current.Major,current.Minor,current.Build,Math.Max(0,current.Revision));
-        installUpdates.Enabled=!updateDispatchBusy && d!=null && d.Status=="Ready" && newer && maintenance.Enabled && check.Enabled;
+        installUpdates.Enabled=!updateDispatchBusy && !actionBusy && IsDesktopUpdateRetryable(d) && newer && maintenance.Enabled;
         downloadStatus.ForeColor=Color.FromArgb(70,79,91);
         if(d==null){if(!updateDispatchBusy)downloadStatus.Text=desktopCommandError??"尚未下载官方安装包。";return;}
         if(d.Status=="Downloading")downloadStatus.Text="正在下载 Desktop "+d.TargetVersion+"：已取得 "+(d.PackageBytes/1048576.0).ToString("F1")+" MB。";
         else if(d.Status=="Ready")downloadStatus.Text=d.FailureKind!=null?d.Message:(newer?"官方包已核验：Desktop "+d.TargetVersion+"。\n完全退出 Claude 和本地 Code 后安装。":"官方包已核验，当前版本无需升级。");
+        else if(IsDesktopUpdateRetryable(d))downloadStatus.Text="上次安装未完成，官方包已保留。\n点击“安装并维护”自动恢复并继续更新。";
         else downloadStatus.Text=d.Message??"正在观察更新操作。";
         if(active || repair || d.Status=="Failed" || d.FailureKind!=null)downloadStatus.ForeColor=Color.FromArgb(145,99,20);
         if(d.Status=="Completed")downloadStatus.ForeColor=Color.FromArgb(24,106,65);
         if(!active && desktopCommandError!=null){downloadStatus.Text=desktopCommandError;downloadStatus.ForeColor=Color.FromArgb(145,99,20);}
     }
-    void RefreshDesktopUpdate(){try{RenderDesktopUpdate(ReadDesktopUpdate());}catch{downloadUpdates.Enabled=installUpdates.Enabled=false;downloadStatus.Text="更新记录暂时无法确认，请查看本地说明。";downloadStatus.ForeColor=Color.FromArgb(163,59,42);}}
+    void RefreshDesktopUpdate(){try{var d=ReadDesktopUpdate();RenderDesktopUpdate(d);RenderClientState(IsClaudeOpen(),updateDispatchBusy || IsDesktopInstallationActive(d));}catch{downloadUpdates.Enabled=installUpdates.Enabled=false;downloadStatus.Text="更新记录暂时无法确认，请查看本地说明。";downloadStatus.ForeColor=Color.FromArgb(163,59,42);}}
+    public void RenderClientState(bool desktopOpen,bool installing) {
+        launch.Text=installing?"更新进行中":desktopOpen?"Claude 已打开":"打开 Claude";
+        if(!desktopOpen && lastDesktopOpen==true && !installing && !actionBusy && !guardWarning && check.Enabled && status.ForeColor==Color.FromArgb(24,106,65) && status.Text.Contains("Claude 已打开")){
+            lastSuccessMessage="Claude 已退出。点击“打开 Claude”继续。";status.Text=lastSuccessMessage;
+        }
+        lastDesktopOpen=desktopOpen;
+    }
+    void RefreshClientState(){try{RenderClientState(IsClaudeOpen(),updateDispatchBusy || IsDesktopInstallationActive(ReadDesktopUpdate()));}catch{launch.Text="状态待确认";}}
     async Task RunDesktopUpdate(string action) {
         if(updateDispatchBusy || IsDisposed)return;
         var current=ReadDesktopUpdate();string id=action=="Install"?(current==null?null:current.Id):Guid.NewGuid().ToString("N");if(id==null)return;
@@ -193,7 +205,7 @@ public sealed class ClaudeGuardWindow : Form {
             });
             if(IsDisposed)return;desktopCommandError=failure;RefreshDesktopUpdate();
         }catch{desktopCommandError="更新操作未能启动，请查看说明。";}
-        finally{updateDispatchBusy=false;if(!IsDisposed){RefreshDesktopUpdate();RefreshNetworkHealth();}}
+        finally{updateDispatchBusy=false;if(!IsDisposed){RefreshClientState();RefreshDesktopUpdate();RefreshNetworkHealth();}}
     }
     async Task RefreshVersionInfo(bool force,bool query) {
         if(versionBusy || IsDisposed || (actionBusy && activeActionKind=="Update"))return;
@@ -237,7 +249,7 @@ public sealed class ClaudeGuardWindow : Form {
     }
     public static MaintenanceView AssessMaintenance(MaintenanceResult m,DateTimeOffset now,bool ownerAlive,bool held) {
         var v=new MaintenanceView();if(m==null)return v;
-        if(held){v.Held=true;v.Message="网络防护已暂停，请退出 Claude 后进行版本维护。";return v;}
+        if(held && (m.Status!="Running" || !ownerAlive)){v.Held=true;v.Message="网络防护已暂停，请退出 Claude 后进行版本维护。";return v;}
         if(m.Status=="Completed"){v.Completed=true;return v;}
         if(m.Status=="Failed" && !m.RecoveryRequired){v.Failed=true;v.Message=m.Reason??"版本维护失败，请查看维护记录。";return v;}
         if(m.RecoveryRequired || m.Status=="Interrupted" || !ownerAlive){v.BlockStart=true;v.Recover=true;v.Message="维护中断，需要恢复。请点击“维护版本”，通过同账号管理员授权恢复后再重试。";return v;}
@@ -252,6 +264,7 @@ public sealed class ClaudeGuardWindow : Form {
             case "Migrating":v.Message="版本维护中，后台守护暂时暂停。\n正在迁移规则和本地 Code 防护，请等待。";break;
             case "Restarting":case "Verifying":v.Message="正在恢复并核验守护。\n当次守护和固定出口通过后，维护才算完成。";break;
             case "Recovering":v.Message="正在恢复中断的维护。\n恢复完成后需要重新核验版本防护。";break;
+            case "PreparingInstall":v.Message="安装前维护已完成。\n正在接续安装，无需再次点击。";break;
             default:v.Message="版本维护正在进行，请等待最终结果。";break;
         }
         return v;
@@ -420,9 +433,9 @@ public sealed class ClaudeGuardWindow : Form {
             status.Text=result.Message;
             status.ForeColor=result.Success?Color.FromArgb(24,106,65):(result.Pending?Color.FromArgb(145,99,20):Color.FromArgb(163,59,42));
             if(result.Success) {lastSuccessMessage=result.Message;RunApiDiagnostic(actionId);}
-            if(result.Success && action=="Start") { launch.Text="Claude 已打开"; }
+            RefreshClientState();
         } catch { status.Text="安全检查未能完成，暂时无法确认启动状态。\n请查看说明后重新检查。";status.ForeColor=Color.FromArgb(163,59,42); }
-        finally {actionBusy=false;activeActionKind=null;if(!IsDisposed){launch.Enabled=check.Enabled=login.Enabled=maintenance.Enabled=true;RefreshNetworkHealth();}}
+        finally {actionBusy=false;activeActionKind=null;if(!IsDisposed){launch.Enabled=check.Enabled=login.Enabled=maintenance.Enabled=true;RefreshClientState();RefreshNetworkHealth();RefreshDesktopUpdate();}}
     }
     async void RunApiDiagnostic(string actionId) {
         try {
@@ -455,7 +468,7 @@ public sealed class ClaudeGuardWindow : Form {
     public class RuntimeVersion {public string Version {get;set;}public string Identity {get;set;}}
     public class CatalogResult {public string Status {get;set;}public string CheckedAt {get;set;}public PublishedVersion LastSuccess {get;set;}}
     public class PublishedVersion {public string CheckedAt {get;set;}public string LatestDesktopVersion {get;set;}}
-    public class DesktopUpdateResult {public int SchemaVersion {get;set;}public string Id {get;set;}public string Status {get;set;}public string TargetVersion {get;set;}public string PackageFile {get;set;}public long PackageBytes {get;set;}public string MaintenanceId {get;set;}public string Message {get;set;}public string FailureKind {get;set;}public int WorkerPid {get;set;}public string WorkerStarted {get;set;}public string WorkerPath {get;set;}}
+    public class DesktopUpdateResult {public int SchemaVersion {get;set;}public string Id {get;set;}public string Status {get;set;}public string TargetVersion {get;set;}public string PackageFile {get;set;}public long PackageBytes {get;set;}public string MaintenanceId {get;set;}public string Message {get;set;}public string FailureKind {get;set;}public string Signature {get;set;}public string PackageHash {get;set;}public int WorkerPid {get;set;}public string WorkerStarted {get;set;}public string WorkerPath {get;set;}}
     public class DesktopCommandResult {public string CommandId {get;set;}public string Message {get;set;}}
 }
 public static class Launcher {

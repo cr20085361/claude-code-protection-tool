@@ -2,7 +2,7 @@
 
 面向 **Windows x64、Claude Desktop 及其本地 Code 会话**的桌面安全入口。项目提供专用代理、防火墙与执行门禁核验、后台守护、版本显示，以及官方 Desktop 和配套 Code 的受控更新。
 
-当前源码基线：**v1.3.0 · 第 6 次已完成迭代**。采用 [MIT 许可证](LICENSE)。本工具与 Anthropic 无隶属关系，不保证账号不受限制，也不改变服务的支持地区或使用政策。
+当前源码基线：**v1.3.2 · 第 8 次源码迭代**。采用 [MIT 许可证](LICENSE)。本工具与 Anthropic 无隶属关系，不保证账号不受限制，也不改变服务的支持地区或使用政策。
 
 ## 能力
 
@@ -13,13 +13,15 @@
 - 查询官方 Windows x64 MSIX 当前发布，下载并核验官方包及配套 Code；更高版本才允许安装，安装后接续防护迁移和守护核验。
 - 保存维护操作身份和最终结果，支持入口关闭重开接续，区分等待、明确授权取消、中断、失败和完成。
 
+v1.3.2 将必要的安装前维护、官方包安装和安装后防护核验接入同一次“安装并维护”操作，无需先手动维护再回来安装；健康状态下直接安装。入口按实际进程刷新“Claude 已打开 / 打开 Claude”，安装期间显示“更新进行中”。资源占用失败仍保留已核验包供重试。
+
 这里管理的是 **Desktop 内嵌元数据指定版本的本地 Code**。独立 CLI、SSH、WSL、云端会话及其他设备不属于当前观察和保护范围。
 
 ## 仓库边界
 
-这是经过公开边界整理的源码快照。账号凭据、节点配置、浏览器数据、部署状态、安装包、编译程序和原始验收记录均不在仓库中。原运行项目在本机保留，本次同步没有修改其程序和防护配置。
+这是经过公开边界整理的源码仓库。账号凭据、节点配置、浏览器数据、部署状态、安装包、编译程序和原始验收记录均在本机保留，不随 GitHub 源码同步发布。
 
-`ClaudeGuard.psm1` 初始化段原先使用作者机器的固定节点 IP 和 v2rayN 路径；公开源码将其换为 `192.0.2.10` 与 `C:\Example\v2rayN` 示例。它们不是可用节点，不能直接照搬运行。源码文件校验值及这六处示例替换记录在 [PUBLICATION.json](PUBLICATION.json)。其他 58 个源码文件与本机 v1.3.0 导出时字节一致。
+`ClaudeGuard.psm1` 初始化段使用 `192.0.2.10` 与 `C:\Example\v2rayN` 示例。它们不是可用节点，不能直接照搬运行。[PUBLICATION.json](PUBLICATION.json) 记录首次 v1.3.0 导出的历史校验值及六处示例替换；后续源码修复以当前 Git 提交及 [验证记录](docs/VALIDATION.md) 为准。本机私有初始化配置和 Python 路径适配未同步到公开源码。
 
 本仓库目前提供源码及开发者说明，**不是已经验收的通用一键安装包**。首次在其他机器部署，需要审查初始化参数、现有代理/策略、Code 缓存和防火墙，按 [部署说明](docs/DEPLOYMENT.md) 分阶段验收。不要把另一台机器的 `private` 目录复制过来使用。
 
@@ -56,7 +58,7 @@ pwsh -NoProfile -File .\Test-ClaudeVersionInfo.ps1
 | `Update-ClaudeGuard.ps1` | 版本防护迁移、备份、回滚与恢复 |
 | `Read-DesktopCodeManifest.cjs`、`Expand-VerifiedCode.cjs` | 读取官方包内元数据、验证并解压配套 Code |
 
-版本沿革见 [CHANGELOG.md](CHANGELOG.md) 和 [.iteration-version.json](.iteration-version.json)。本次首次公开同步保留 v1.3.0，不增加功能迭代次数，也没有创建安装包或 Release。
+版本沿革见 [CHANGELOG.md](CHANGELOG.md) 和 [.iteration-version.json](.iteration-version.json)。[PUBLICATION.json](PUBLICATION.json) 保留首次 v1.3.0 公开同步的历史校验值，后续修改不再与该快照逐字节一致。未创建安装包或 Release。
 
 ## 反馈与贡献
 

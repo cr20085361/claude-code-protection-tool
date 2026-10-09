@@ -12,6 +12,13 @@ if($Worker) {
     $record=@{Time=(Get-Date -Format o);Success=$false;Reason=$null;ChangedPermissions=@();Candidates=@()}
     try {
         foreach($root in $d.CodeGate.Roots) {
+            if(Test-Path -LiteralPath $root){
+                Assert-CodeCacheGate $root
+                if((Get-Item -LiteralPath $root -Force).Attributes -band [IO.FileAttributes]::ReparsePoint -or @(Get-ChildItem -LiteralPath $root -Recurse -Force|Where-Object {$_.Attributes -band [IO.FileAttributes]::ReparsePoint}).Count){throw 'Code cache reparse point requires separate review.'}
+            }
+        }
+        Repair-GuardDesktopCodeCache
+        foreach($root in $d.CodeGate.Roots) {
             Assert-CodeCacheGate $root
             if((Get-Item $root).Attributes -band [IO.FileAttributes]::ReparsePoint -or @(Get-ChildItem $root -Recurse -Force|Where-Object {$_.Attributes -band [IO.FileAttributes]::ReparsePoint}).Count){throw 'Code cache reparse point requires separate review.'}
             foreach($file in Get-ChildItem $root -Recurse -Force -File -Filter *.exe) {
@@ -33,7 +40,6 @@ if($Worker) {
                 }
             }
         }
-        Repair-GuardDesktopCodeCache
         Assert-GuardFirewall
         $record.Success=$true
     } catch {$record.Reason=$_.Exception.Message} finally {Write-GuardJson $ResultFile $record}
