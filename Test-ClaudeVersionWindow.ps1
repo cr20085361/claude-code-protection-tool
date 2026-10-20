@@ -14,6 +14,8 @@ public static class VersionWindowRunner {
    var status=Field<Label>(w,"status");var health=Field<Label>(w,"networkHealth");status.Text="original-action";health.Text="original-health";
    var info=new ClaudeGuardWindow.VersionResult{SchemaVersion=1,InstalledDesktopVersion="2.26454.2.0",InstalledCodeVersion="2.1.293",ApprovedCodeVersion="2.1.293",InstalledMatchesApproved=true,Runtime=new ClaudeGuardWindow.RuntimeVersion[0],ToolVersion="v1.2.0",Catalog=new ClaudeGuardWindow.CatalogResult{Status="Checked",LastSuccess=new ClaudeGuardWindow.PublishedVersion{CheckedAt=DateTimeOffset.UtcNow.ToString("o"),LatestDesktopVersion="2.26454.2"}},UpdateDecision="Current"};
    w.RenderVersionInfo(info);Application.DoEvents();
+   Require(w.Text.Contains(ClaudeGuardWindow.BuildVersion)&&Field<Label>(w,"toolBuildVersion").Text.Contains(ClaudeGuardWindow.BuildVersion),"compiled-tool-version-visible-in-title-and-header");
+   w.MaintenanceViewOnly=true;Require(w.Text.Contains("版本维护")&&w.Text.Contains(ClaudeGuardWindow.BuildVersion),"maintenance-title-shows-compiled-tool-version");w.MaintenanceViewOnly=false;
    Require(Field<Label>(w,"installedVersions").Text.Contains("2.26454.2.0")&&Field<Label>(w,"installedVersions").Text.Contains("2.1.293"),"native-installed-and-approved-versions-visible");
    Require(Field<Label>(w,"runtimeVersions").Text=="本地 Code：未运行。","native-not-running-is-not-installed-version");
    info.Runtime=new[]{new ClaudeGuardWindow.RuntimeVersion{Version="2.1.293",Identity="Approved"}};w.RenderVersionInfo(info);

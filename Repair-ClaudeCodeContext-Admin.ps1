@@ -17,8 +17,9 @@ if($Worker) {
                 if((Get-Item -LiteralPath $root -Force).Attributes -band [IO.FileAttributes]::ReparsePoint -or @(Get-ChildItem -LiteralPath $root -Recurse -Force|Where-Object {$_.Attributes -band [IO.FileAttributes]::ReparsePoint}).Count){throw 'Code cache reparse point requires separate review.'}
             }
         }
-        Repair-GuardDesktopCodeCache
         foreach($root in $d.CodeGate.Roots) {
+            # 缺失目录由下方受控修复创建；先收紧已有旧引擎，再执行完整门禁验收。
+            if(-not (Test-Path -LiteralPath $root)){continue}
             Assert-CodeCacheGate $root
             if((Get-Item $root).Attributes -band [IO.FileAttributes]::ReparsePoint -or @(Get-ChildItem $root -Recurse -Force|Where-Object {$_.Attributes -band [IO.FileAttributes]::ReparsePoint}).Count){throw 'Code cache reparse point requires separate review.'}
             foreach($file in Get-ChildItem $root -Recurse -Force -File -Filter *.exe) {
@@ -40,6 +41,7 @@ if($Worker) {
                 }
             }
         }
+        Repair-GuardDesktopCodeCache
         Assert-GuardFirewall
         $record.Success=$true
     } catch {$record.Reason=$_.Exception.Message} finally {Write-GuardJson $ResultFile $record}

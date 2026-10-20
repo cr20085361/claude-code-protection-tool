@@ -26,7 +26,7 @@ function script:Read-ClaudeDesktopUpdateEngine {[pscustomobject]@{desktopCodeVer
 function script:Assert-ClaudeDesktopUpdateCodeCache {}
 function script:Assert-ClaudeDesktopUpdateProtectionReady {if(-not $script:FixtureReady){throw 'protection not ready'}}
 function script:Assert-GuardPolicy {if($script:FixtureFailure -eq 'policy'){throw 'policy changed'}}
-function script:Assert-GuardCore {}
+function script:Assert-GuardCore {param([switch]$ConfigurationOnly);if($script:FixtureFailure -eq 'core'){throw 'Proxy runtime or fixed config changed.'};if($script:FixtureFailure -eq 'proxy-stopped' -and -not $ConfigurationOnly){throw 'Proxy absent or unexpected listeners.'}}
 function script:New-GuardMaintenanceOperation($Id){$script:FixtureMaintenance=[pscustomobject]@{ActionId=$Id;Status='Running';Phase='Preparing';WorkerPid=0;DesktopDownloadId=$null;RecoveryRequired=$false;CompletedAt=$null;FailureKind=$null;Reason=$null};$script:FixtureMaintenance}
 function script:Set-GuardMaintenanceOperation($Id,$Changes,[switch]$Recovery){foreach($key in $Changes.Keys){$script:FixtureMaintenance|Add-Member -NotePropertyName $key -NotePropertyValue $Changes[$key] -Force};$script:FixtureMaintenance}
 function script:Read-GuardMaintenanceOperation($Id){$script:FixtureMaintenance}
@@ -108,6 +108,13 @@ Reject {New-ClaudeDesktopUpdateRequest $Root $second} 'running-clients-block-ins
 Require (-not $script:FixtureMaintenance) 'running-clients-do-not-pause-guardian'
 $script:FixtureFailure='policy';$script:FixtureReady=$false
 Reject {New-ClaudeDesktopUpdateRequest $Root $second} 'real-protection-failure-does-not-use-update-state-to-allow-install'
+$script:FixtureFailure='core'
+Reject {New-ClaudeDesktopUpdateRequest $Root $second} 'changed-core-configuration-still-blocks-automatic-maintenance'
+$script:FixtureFailure='proxy-stopped'
+$stoppedRequest=New-ClaudeDesktopUpdateRequest $Root $second
+Require ($stoppedRequest.Request.PreparationRequired -and $stoppedRequest.Request.AutoPrepare) 'stopped-proxy-can-enter-reviewed-maintenance-without-listener'
+$null=Set-GuardMaintenanceOperation $stoppedRequest.Request.Id @{Status='Failed';Phase='Failed'}
+$null=Set-ClaudeDesktopUpdate $Root $second @{Status='Ready';Phase='Ready';MaintenanceId=$null}
 $script:FixtureFailure='';$script:FixtureReady=$true;$script:FixtureVersion='2.26455.1.0'
 Reject {New-ClaudeDesktopUpdateRequest $Root $second} 'same-version-reinstall-refused'
 $script:FixtureVersion='2.26456.1.0'

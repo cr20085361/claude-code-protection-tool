@@ -43,7 +43,8 @@ function New-GuardIPv4Config($Config){$Config}
 function Get-GuardDesktopProcesses {}
 function Get-CimInstance {}
 function Get-AuthenticodeSignature {[pscustomobject]@{Status='Valid';SignerCertificate=[pscustomobject]@{Subject='O="Anthropic, PBC", C=US'}}}
-function Assert-CodeCacheGate {}
+function Assert-CodeCacheGate {param($Path);if(-not (Test-Path -LiteralPath $Path)){throw 'fixture-cache-root-missing'};if($global:MaintenanceFixtureFailure -eq 'cache-gate'){throw 'fixture-cache-gate-changed'}}
+function Set-CodeCacheGate {param($Path);$global:MaintenanceFixtureCalls.Add('set-cache-gate')}
 function Test-CodeCacheGate {}
 function Protect-CodeBinary {}
 function Set-CodeAccessOnlyAcl {$global:MaintenanceFixtureCalls.Add('restore-acl')}
@@ -147,6 +148,17 @@ $continued=Read-GuardMaintenanceOperation $f.Id
 Require ((Read-GuardJson $f.Result).Success -and $continued.Status -eq 'Running' -and $continued.Phase -eq 'PreparingInstall') 'pre-install-maintenance-success-keeps-update-running'
 Require (-not (Get-GuardMaintenanceUiResult $continued).Success -and (Get-GuardMaintenanceUiResult $continued).Pending) 'pre-install-maintenance-does-not-publish-final-success'
 $f=Prepare-FixtureInstall
+$missingRoot=(Get-GuardState).CodeGate.Roots[1]
+$fixtureFull=[IO.Path]::GetFullPath($Fixture).TrimEnd('\')+'\'
+if(-not ([IO.Path]::GetFullPath($missingRoot)).StartsWith($fixtureFull,[StringComparison]::OrdinalIgnoreCase)){throw 'Unsafe missing-cache fixture path.'}
+Remove-Item -LiteralPath $missingRoot -Recurse -Force
+$null=& (Get-GuardPath 'Update-ClaudeGuard.ps1') -Install -StageFile $f.Stage -StageHash $f.StageHash -ResultFile $f.Result -OperationId $f.Id
+Require ((Read-GuardJson $f.Result).Success -and (Test-Path -LiteralPath (Get-GuardState).CodePaths[1])) 'maintenance-restores-missing-package-code-cache'
+Require ($global:MaintenanceFixtureCalls.IndexOf('suspend') -lt $global:MaintenanceFixtureCalls.IndexOf('set-cache-gate') -and 'set-cache-gate' -in $global:MaintenanceFixtureCalls) 'missing-cache-gated-after-supervisor-suspension'
+$f=Prepare-FixtureInstall;$global:MaintenanceFixtureFailure='cache-gate'
+$null=& (Get-GuardPath 'Update-ClaudeGuard.ps1') -Install -StageFile $f.Stage -StageHash $f.StageHash -ResultFile $f.Result -OperationId $f.Id
+Require (-not (Read-GuardJson $f.Result).Success -and $global:MaintenanceFixtureCalls.Count -eq 0) 'changed-existing-cache-gate-refused-before-mutation'
+$f=Prepare-FixtureInstall
 $null=& (Get-GuardPath 'Update-ClaudeGuard.ps1') -Install -StageFile $f.Stage -StageHash $f.StageHash -ResultFile $f.Result -OperationId $f.Id -ContinueDesktopUpdate
 Require (-not (Read-GuardJson $f.Result).Success -and $global:MaintenanceFixtureCalls.Count -eq 0) 'ordinary-maintenance-cannot-request-update-continuation'
 $f=Prepare-FixtureInstall;$global:MaintenanceFixtureDisabled=$true;$global:MaintenanceFixtureFailure='firewall'
@@ -173,14 +185,19 @@ Require $true 'reviewed-maintenance-can-retry-after-recovery'
 $null=Reset-State
 $prepareText=Get-Content -LiteralPath (Join-Path $Project 'Update-ClaudeGuard.ps1') -Raw
 $tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseInput($prepareText,[ref]$tokens,[ref]$errors)
-$networkBranch=@($ast.FindAll({param($node)$node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text.StartsWith('if(-not (Test-Path (Get-GuardPath ''private\safety-hold.json'')))') -and $node.Extent.Text.Contains('DesktopTaskSnapshot')},$true))
+$networkBranch=@($ast.FindAll({param($node)$node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text.StartsWith('if(-not (Test-Path (Get-GuardPath ''private\safety-hold.json''))') -and $node.Extent.Text.Contains('DesktopTaskSnapshot')},$true))
 Require ($networkBranch.Count -eq 1) 'desktop-update-preparation-network-branch-located'
+$compressed=Get-GuardPath 'private\fixture-cached-code.zst'
 $OperationId='fixture-update';$op=[pscustomobject]@{SupervisorSuspended=$true;DesktopTaskSnapshot=@{Path='fixture'}}
 & ([scriptblock]::Create($networkBranch[0].Extent.Text))
 Require ('start-proxy-worker' -in $global:MaintenanceFixtureCalls) 'desktop-update-preparation-does-not-start-disabled-supervisor-task'
 $global:MaintenanceFixtureCalls.Clear();$op.SupervisorSuspended=$false
 & ([scriptblock]::Create($networkBranch[0].Extent.Text))
 Require ('start-proxy' -in $global:MaintenanceFixtureCalls) 'ordinary-maintenance-retains-supervisor-readiness-check'
+$global:MaintenanceFixtureCalls.Clear();[IO.File]::WriteAllText($compressed,'fixture-cached-payload')
+& ([scriptblock]::Create($networkBranch[0].Extent.Text))
+Require ($global:MaintenanceFixtureCalls.Count -eq 0) 'cached-maintenance-preparation-does-not-wait-for-broken-supervisor'
+Remove-Item -LiteralPath $compressed
 $global:MaintenanceFixtureCalls.Clear();Write-GuardJson (Get-GuardPath 'private\safety-hold.json') @{Reason='fixture'}
 & ([scriptblock]::Create($networkBranch[0].Extent.Text))
 Require ($global:MaintenanceFixtureCalls.Count -eq 0) 'real-safety-hold-still-blocks-new-maintenance-network'

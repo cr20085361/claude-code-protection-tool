@@ -33,7 +33,8 @@ function Write-GuardJson([string]$Path, $Value) {
             catch {
                 $failure=$_.Exception;while($failure.InnerException){$failure=$failure.InnerException}
                 $nativeCode=$failure.HResult -band 65535
-                if($nativeCode -notin @(5,32,33) -or $retry.ElapsedMilliseconds -ge 2000){throw}
+                # ReplaceFile 1175 保留源/目标原名，可与短暂占用一起有限重试；1176/1177 不保证目标仍在。
+                if($nativeCode -notin @(5,32,33,1175) -or $retry.ElapsedMilliseconds -ge 2000){throw}
                 [Threading.Thread]::Sleep(50)
             }
         }while($true)
@@ -284,7 +285,7 @@ function Install-GuardDesktopUserPolicy([switch]$RepairCodeCache) {
 function Get-GuardListener {
     @(Get-NetTCPConnection -State Listen -LocalPort 10818 -ErrorAction SilentlyContinue)
 }
-function Assert-GuardCore {
+function Assert-GuardCore([switch]$ConfigurationOnly) {
     $d=Get-GuardState
     $core=Get-GuardPath 'runtime\sing-box.exe'
     $cfg=Get-GuardPath 'private\proxy.json'
@@ -296,6 +297,7 @@ function Assert-GuardCore {
     }
     $nic = Get-NetAdapter -Name $d.InterfaceName -ErrorAction Stop
     if ($nic.Status -ne 'Up' -or $nic.InterfaceGuid.ToString() -ne $d.InterfaceGuid) { throw 'Bound physical interface unavailable or replaced.' }
+    if($ConfigurationOnly){return}
     $listeners=@(Get-GuardListener)
     if ($listeners.Count -ne 1 -or $listeners[0].LocalAddress -ne '127.0.0.1') { throw 'Proxy absent or unexpected listeners.' }
     $proc=Get-CimInstance Win32_Process -Filter "ProcessId=$($listeners[0].OwningProcess)"

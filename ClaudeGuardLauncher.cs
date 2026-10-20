@@ -9,7 +9,11 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
+[assembly: System.Reflection.AssemblyVersion("1.3.3.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.3.3.0")]
+
 public sealed class ClaudeGuardWindow : Form {
+    public const string BuildVersion="v1.3.3";
     static string ReadSharedText(string path) {
         var retry=Stopwatch.StartNew();
         while(true) {
@@ -34,6 +38,7 @@ public sealed class ClaudeGuardWindow : Form {
     readonly Label runtimeVersions = new Label();
     readonly Label updateStatus = new Label();
     readonly Label entryVersion = new Label();
+    readonly Label toolBuildVersion = new Label();
     readonly Button checkUpdates = new Button();
     readonly Button downloadUpdates = new Button();
     readonly Button installUpdates = new Button();
@@ -58,14 +63,20 @@ public sealed class ClaudeGuardWindow : Form {
     string activeActionKind;
     DateTimeOffset maintenanceRequestStarted;
     public bool PreviewOnly;
-    public bool MaintenanceViewOnly;
+    bool maintenanceViewOnly;
+    public bool MaintenanceViewOnly {
+        get { return maintenanceViewOnly; }
+        set { maintenanceViewOnly=value; Text="Claude Pro · "+(value?"版本维护 ":"安全入口 ")+BuildVersion; }
+    }
     public ClaudeGuardWindow(string projectRoot, string pwsh) {
         root=projectRoot; shell=pwsh;
-        Text="Claude Pro · 安全入口"; ClientSize=new Size(660,498);
+        Text="Claude Pro · 安全入口 "+BuildVersion; ClientSize=new Size(660,498);
         AutoScroll=true;AutoScrollMinSize=new Size(640,490);
         FormBorderStyle=FormBorderStyle.FixedDialog; MaximizeBox=false; StartPosition=FormStartPosition.CenterScreen;
         Font=new Font("Microsoft YaHei UI",10); BackColor=Color.FromArgb(247,249,252);
         var title=new Label { Text="Claude Pro", Font=new Font("Microsoft YaHei UI",19,FontStyle.Bold), Location=new Point(24,20), AutoSize=true };
+        toolBuildVersion.Text="安全入口 "+BuildVersion;toolBuildVersion.SetBounds(310,31,324,26);
+        toolBuildVersion.TextAlign=ContentAlignment.MiddleRight;toolBuildVersion.ForeColor=Color.FromArgb(70,79,91);
         var hint=new Label { Text="双击入口后，自动检查连接并打开 Claude。",Location=new Point(26,64),AutoSize=true,ForeColor=Color.FromArgb(70,79,91) };
         status.SetBounds(26,100,608,80); status.Text="正在检查专用网络和防护配置……";
         launch.Text="打开 Claude"; launch.SetBounds(26,188,120,38);
@@ -91,7 +102,7 @@ public sealed class ClaudeGuardWindow : Form {
         };
         var footer=new Label {Text="专用网络由后台守护恢复；软件升级通过“维护版本”核验。",Location=new Point(26,242),AutoSize=true,ForeColor=Color.FromArgb(70,79,91)};
         networkHealth.SetBounds(26,266,608,24); networkHealth.Font=new Font("Microsoft YaHei UI",9);networkHealth.Text="后台守护状态待确认。";
-        Controls.AddRange(new Control[]{title,hint,status,launch,check,login,report,maintenance,footer,networkHealth});
+        Controls.AddRange(new Control[]{title,toolBuildVersion,hint,status,launch,check,login,report,maintenance,footer,networkHealth});
         var divider=new Label{BackColor=Color.FromArgb(219,225,231),Location=new Point(26,300),Size=new Size(608,1)};
         installedVersions.SetBounds(26,312,608,23);installedVersions.Text="正在读取 Desktop 和配套 Code 版本……";installedVersions.AutoEllipsis=true;
         runtimeVersions.SetBounds(26,338,608,23);runtimeVersions.Text="本地 Code：运行版本待确认。";runtimeVersions.AutoEllipsis=true;

@@ -187,7 +187,7 @@ function Assert-ClaudeDesktopUpdateClientsExited {
 }
 function Test-ClaudeDesktopUpdatePreparationRequired {
     # 自动维护仍须遵守原账号、代理策略和核心文件边界。
-    Assert-GuardPolicy;Assert-GuardCore
+    Assert-GuardPolicy;Assert-GuardCore -ConfigurationOnly
     try{Assert-ClaudeDesktopUpdateProtectionReady;return $false}catch{return $true}
 }
 function New-ClaudeDesktopUpdateRequest([string]$Root,[string]$Id) {
@@ -308,6 +308,7 @@ function Invoke-ClaudeDesktopUpdateMaintenance([string]$Root,[string]$Id,[switch
     if($BeforeInstall){
         $migration=Read-GuardJson $result
         $state=Get-GuardState
+        if(-not $migration.Success){throw ('安装前自动维护未完成，安装尚未执行：'+$migration.Reason)}
         if(-not $migration.Success -or $migration.ActionId -ne $Id -or $migration.StageId -ne $stageId -or $migration.DesktopVersion -ne $state.Desktop.Version -or $migration.CodeVersion -ne $state.CodeGate.Version -or $m.Status -ne 'Running'){throw '安装前自动维护未完成，安装尚未执行。'}
         Assert-ClaudeDesktopUpdateProtectionReady
         $null=Set-GuardMaintenanceOperation $Id @{Phase='PreparingInstall';PreparationResultFile=$result;StageId=$null;StageFile=$null;StageHash=$null;ResultFile=$null;BackupFile=$null;BackupHash=$null;TaskBackup=$null;TaskBackupHash=$null;ProxyBackup=$null;ProxyBackupHash=$null;DesktopTaskSnapshot=$null;SupervisorSuspended=$false;BaselineChanged=$false}

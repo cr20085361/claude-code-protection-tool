@@ -84,7 +84,15 @@ if($Install) {
         if(@(Compare-Object @($expectedRoots|Sort-Object) @($candidate.CodeGate.Roots|Sort-Object)).Count){throw 'Unexpected Code cache roots.'}
         $expectedPaths=@($expectedRoots|ForEach-Object {Join-Path $_ ($candidate.CodeGate.Version+'\'+$candidate.CodeGate.CompressedHash.Substring(0,12)+'\claude.exe')})
         if(@(Compare-Object @($expectedPaths|Sort-Object) @($candidate.CodePaths|Sort-Object)).Count){throw 'Unexpected Code binary paths.'}
-        foreach($root in $expectedRoots){Assert-CodeCacheGate $root}
+        foreach($root in $expectedRoots){
+            # MSIX/客户端清理可能移除整个缓存；已有门禁仍必须核验，缺失门禁在暂停守护后重建。
+            $ancestor=$root
+            while($ancestor){
+                if((Test-Path -LiteralPath $ancestor) -and ((Get-Item -LiteralPath $ancestor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'Code cache reparse point requires separate review.'}
+                $ancestor=Split-Path $ancestor -Parent
+            }
+            if(Test-Path -LiteralPath $root){Assert-CodeCacheGate $root}
+        }
         foreach($path in $expectedPaths){if((Test-Path $path) -and (Get-GuardHash $path).ToLowerInvariant() -ne $candidate.CodeGate.PayloadHash.ToLowerInvariant()){throw 'Existing new Code cache differs from reviewed payload.'}}
         if(-not $candidate.PSObject.Properties['UpdatePolicyBackup']) {
             $policyKey=Get-Item 'HKCU:\SOFTWARE\Policies\Claude'
@@ -135,6 +143,13 @@ if($Install) {
         $fresh=Read-GuardJson (Get-GuardPath 'private\firewall.json')
         $fresh.Rules=@($fresh.Rules)+@($priorRules.Rules|Where-Object {$_.Name -notin @($fresh.Rules.Name)})
         Write-GuardJson (Get-GuardPath 'private\firewall.json') $fresh
+        foreach($root in $expectedRoots){
+            if(-not (Test-Path -LiteralPath $root)){
+                New-Item -ItemType Directory -Path $root -Force|Out-Null
+                Set-CodeCacheGate $root
+            }
+            Assert-CodeCacheGate $root
+        }
         foreach($path in $d.CodePaths) {
             if(Test-Path $path){$acl=[Security.AccessControl.FileSecurity]::new();$acl.SetAccessRuleProtection($false,$false);Set-CodeAccessOnlyAcl $path $acl}
         }
@@ -223,12 +238,13 @@ $manifest=& node (Join-Path $PSScriptRoot 'Read-DesktopCodeManifest.cjs') $archi
 if($LASTEXITCODE -ne 0){throw 'New Code manifest could not be verified.'}
 $m=$manifest|ConvertFrom-Json
 if(-not $m.msixAutomaticCodeUpdatesDisabled -or -not $m.desktopUpdatePolicySupported){throw 'This Desktop update mechanism requires additional review.'}
-if(-not (Test-Path (Get-GuardPath 'private\safety-hold.json'))){
+$compressed=Get-GuardPath ('private\code-'+$m.platform.checksum+'.zst')
+# 已缓存的官方载荷仍在下方完整核验；准备离线候选不依赖正等待本次维护修复的守护。
+if(-not (Test-Path (Get-GuardPath 'private\safety-hold.json')) -and -not (Test-Path -LiteralPath $compressed)){
     if($OperationId -and (Get-GuardLifecycleValue $op 'SupervisorSuspended' $false) -and (Get-GuardLifecycleValue $op 'DesktopTaskSnapshot')){Start-GuardProxy -SupervisorWorker}else{Start-GuardProxy}
     $null=Test-GuardEgress
 }
 $id=[guid]::NewGuid().ToString('N')
-$compressed=Get-GuardPath ('private\code-'+$m.platform.checksum+'.zst')
 $payload=Get-GuardPath ('private\code-'+$m.platform.checksum+'.exe')
 if(-not (Test-Path $compressed)) {
     if(Test-Path (Get-GuardPath 'private\safety-hold.json')){throw 'SafetyHold: uncached official payload needs separate network review.'}

@@ -5,8 +5,8 @@
     "recorded_at": "2026-10-01T12:03:55+08:00",
     "version_source": null
   },
-  "current_version": "v1.3.2",
-  "completed_iterations": 8,
+  "current_version": "v1.3.3",
+  "completed_iterations": 9,
   "history": [
     {
       "id": "1ed80264-8644-40fd-a830-3d725048fa07",
@@ -79,6 +79,15 @@
       "summary": "合并一次安装操作：自动前维护、MSIX安装及后维护核验；修复客户端退出后的过期已打开按钮和成功提示，安装期间显示更新进行中",
       "verification": "92 update cases; 79 native UI and real isolated process cases; maintenance 40 PS + 10 CSharp; 7 maintenance windows; 11 version windows; 22 paired health cases; x64 compilation and PS parsers PASS. Existing real Desktop 2.31226.0.0 update completed and guardian ready; launcher hot-replaced with client sessions retained. New combined pre-maintenance plus higher-version MSIX end-to-end NOT_RUN because current target is already installed.",
       "recorded_at": "2026-10-09T12:20:41.7472960+08:00"
+    },
+    {
+      "id": "7b7bd753-7e9c-4a6b-b270-2cd60db1ea80",
+      "from_version": "v1.3.2",
+      "to_version": "v1.3.3",
+      "level": "patch",
+      "summary": "修复缺失缓存、更新前维护等待、旧引擎权限修复顺序及状态文件1175重试；入口与维护界面显著显示编译版本",
+      "verification": "Update 94; maintenance 44 PS + 10 CSharp; cache worker 5; JSON state 12; health 22 paired cases PASS. Real Desktop 2.42304.2.0 / Code 2.1.299 installation, post-maintenance, UI Check and subsequent same-run safety/egress cycle PASS. 13 native version UI cases, rendered header preview, and live x64 launcher 1.3.3.0 deployment PASS; sanitized public snapshot update 94, maintenance 44 PS + 10 CSharp, cache 5, JSON 12 and UI 13 reruns PASS. Authenticated Code session, sleep/relogin and long-run NOT_RUN.",
+      "recorded_at": "2026-10-20T19:07:54.248329+08:00"
     }
   ]
 }
