@@ -4,10 +4,9 @@ $ErrorActionPreference='Stop'
 Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard.psm1') -Force
 $d=Get-GuardState
 $roots=@(
-    (Join-Path $env:APPDATA 'Claude\claude-code'),
-    (Join-Path $env:LOCALAPPDATA ('Packages\'+$d.Desktop.Family+'\LocalCache\Roaming\Claude\claude-code')),
+    (Get-GuardCodeCacheRoots $d.Desktop),
     (Join-Path ([IO.Path]::GetDirectoryName($d.Desktop.Path)) 'resources\preseed\claude-code')
-)
+) | ForEach-Object { $_ }
 $found=@()
 foreach($root in $roots) {
     if(Test-Path -LiteralPath $root) {

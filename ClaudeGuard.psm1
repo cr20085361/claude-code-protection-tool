@@ -50,11 +50,51 @@ function Get-GuardSupervisorScript($Reliability) {
 . (Get-GuardPath 'ClaudeGuard-Health.ps1')
 function New-GuardIPv4Config($Config) {
     $copy=$Config|ConvertTo-Json -Depth 40|ConvertFrom-Json
+    if($copy.PSObject.Properties['routing']){return $copy} # Xray node pools already reject literal IPv6 and use IPv4 node sockets.
     $copy.dns.strategy='ipv4_only'
     $copy.route|Add-Member -NotePropertyName rules -NotePropertyValue @([ordered]@{ip_version=6;action='reject'},[ordered]@{action='resolve';strategy='ipv4_only'}) -Force
     $copy
 }
 function Get-GuardHash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
+function Get-GuardCorePath($State=(Get-GuardState)) {
+    $engine=Get-GuardLifecycleValue $State 'ProxyEngine' 'sing-box'
+    switch($engine){'sing-box'{Get-GuardPath 'runtime\sing-box.exe'} 'xray'{Get-GuardPath 'runtime\xray.exe'} default{throw 'Unsupported dedicated proxy engine.'}}
+}
+function Test-GuardProxyConfiguration([string]$Path,$State=(Get-GuardState)) {
+    $core=Get-GuardCorePath $State
+    if((Get-GuardLifecycleValue $State 'ProxyEngine' 'sing-box') -eq 'xray'){$output=& $core run -test -c $Path 2>&1}else{$output=& $core check -c $Path 2>&1}
+    if($LASTEXITCODE -ne 0){throw 'Dedicated proxy configuration validation failed.'}
+}
+function New-GuardXrayNodePool($Nodes,[string]$InterfaceName,[int]$Port=10818) {
+    $approved=@($Nodes|ConvertTo-Json -Depth 40|ConvertFrom-Json)
+    if(-not $approved.Count){throw 'At least one approved node is required.'}
+    $tags=@()
+    for($i=0;$i -lt $approved.Count;$i++){
+        $n=$approved[$i];$ip=$null
+        if($n.protocol -ne 'vless' -or -not [Net.IPAddress]::TryParse([string]$n.settings.address,[ref]$ip) -or $ip.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork -or $n.settings.port -lt 1 -or $n.settings.port -gt 65535 -or $n.streamSettings.security -ne 'reality' -or $n.streamSettings.network -notin @('raw','tcp')){throw 'Node pool requires explicit IPv4 VLESS Reality nodes.'}
+        # Rebuild from approved fields: never import direct routes, DNS, mux or proxy chaining from the shared client.
+        $tag='node-'+$i;$tags+=$tag
+        $approved[$i]=[pscustomobject]@{tag=$tag;protocol='vless';settings=$n.settings;streamSettings=@{network='raw';security='reality';realitySettings=$n.streamSettings.realitySettings;sockopt=@{interface=$InterfaceName;domainStrategy='UseIPv4'}}}
+    }
+    [pscustomobject]@{
+        log=@{loglevel='warning'}
+        inbounds=@(@{tag='local';listen='127.0.0.1';port=$Port;protocol='mixed';settings=@{auth='noauth';udp=$false}})
+        outbounds=@($approved)+@(@{tag='block';protocol='blackhole'})
+        observatory=@{subjectSelector=@('node-');probeUrl='https://www.gstatic.com/generate_204';probeInterval='30s';enableConcurrency=$true}
+        routing=@{domainStrategy='AsIs';rules=@(@{type='field';ip=@('::/0');outboundTag='block'},@{type='field';network='tcp,udp';balancerTag='approved-nodes'});balancers=@(@{tag='approved-nodes';selector=@('node-');fallbackTag='block';strategy=@{type='leastPing'}})}
+    }
+}
+function Assert-GuardXrayNodePool($Config,$State) {
+    $nodes=@($Config.outbounds|Where-Object protocol -eq 'vless')
+    $expected=@(Get-GuardExpectedIps $State)
+    if(-not $nodes.Count -or @($Config.outbounds).Count -ne $nodes.Count+1){throw 'Approved node pool invariant failed.'}
+    foreach($node in $nodes){if([string]$node.settings.address -notin $expected){throw 'Approved node pool endpoint changed.'}}
+    $canonical=New-GuardXrayNodePool $nodes $State.InterfaceName
+    # Compare structural invariants independent of JSON property ordering; config hash covers every byte.
+    if($Config.inbounds.Count -ne 1 -or $Config.inbounds[0].listen -ne '127.0.0.1' -or $Config.inbounds[0].port -ne 10818 -or $Config.inbounds[0].protocol -ne 'mixed' -or $Config.outbounds[-1].protocol -ne 'blackhole' -or $Config.outbounds[-1].tag -ne 'block'){throw 'Approved node pool listener or fallback changed.'}
+    if($Config.routing.domainStrategy -ne 'AsIs' -or $Config.routing.rules.Count -ne 2 -or $Config.routing.rules[0].ip[0] -ne '::/0' -or $Config.routing.rules[0].outboundTag -ne 'block' -or $Config.routing.rules[1].balancerTag -ne 'approved-nodes' -or $Config.routing.balancers.Count -ne 1 -or $Config.routing.balancers[0].fallbackTag -ne 'block' -or $Config.routing.balancers[0].strategy.type -ne 'leastPing'){throw 'Approved node pool routing changed.'}
+    foreach($node in $nodes){if($node.streamSettings.sockopt.interface -ne $State.InterfaceName -or $node.streamSettings.sockopt.domainStrategy -ne 'UseIPv4'){throw 'Approved node pool interface changed.'}}
+}
 function Test-GuardLocalCodeAcceptance {
     $d=Get-GuardState
     if($d.CodeCoverage -ne 'verified' -or -not $d.PSObject.Properties['LocalCodeAcceptance']){return $false}
@@ -164,7 +204,7 @@ function Initialize-Guard {
         ProxyUrl='http://127.0.0.1:10818';ExpectedIp='192.0.2.10';InterfaceName=$nic[0].Name;InterfaceGuid=$nic[0].InterfaceGuid.ToString()
         ConfigDir=$configDir;Desktop=$desktop;CoreHash=(Get-GuardHash (Get-GuardPath 'runtime\sing-box.exe'));ProxyConfigHash=(Get-GuardHash $cfgPath)
         OriginalCli=@{Path=(Join-Path $env:USERPROFILE '.claude\settings.json');Hash=(Get-GuardHash (Join-Path $env:USERPROFILE '.claude\settings.json'))}
-        SourceSnapshots=@(@{Path=$source;Hash=(Get-GuardHash $source)},@{Path='C:\Example\v2rayN\guiConfigs\guiNConfig.json';Hash=(Get-GuardHash 'C:\Example\v2rayN\guiConfigs\guiNConfig.json')})
+        SourceSnapshots=@(@{Path=$source;Hash=(Get-GuardHash $source)},@{Path='C:\Example\v2rayN\guiConfigs\guiNConfig.json';Hash=(Get-GuardHash ('C:\Example\v2rayN\guiConfigs\guiNConfig.json'))})
         PolicyBackup=@{KeyExisted=(Test-Path $script:Policy);Value=(Get-GuardPolicyValue 'egressProxyUrl');Kind=$null}
         CodeCoverage='unverified';CodePaths=@();FirewallInstalled=$false;PolicyInstalled=$false
     }
@@ -190,13 +230,22 @@ function Install-GuardUserPolicy {
     Write-GuardJson (Get-GuardPath 'private\deployment.json') $d
     Assert-GuardPolicy
 }
+function Get-GuardCodeCacheRoots($Desktop) {
+    # Desktop 3.x moved its user data outside MSIX LocalCache. Keep legacy caches gated.
+    if (-not $Desktop -or $Desktop.Family -notmatch '^[A-Za-z0-9]+_[A-Za-z0-9]+$') { throw 'Invalid Claude package family for Code cache paths.' }
+    @(
+        (Join-Path $env:APPDATA 'Claude\claude-code'),
+        (Join-Path $env:LOCALAPPDATA ('Packages\'+$Desktop.Family+'\LocalCache\Roaming\Claude\claude-code')),
+        (Join-Path $env:LOCALAPPDATA ('Claude-Data\'+$Desktop.Family.ToLowerInvariant()+'\claude-code'))
+    )
+}
 function Repair-GuardDesktopCodeCache {
     # 仅补齐桌面上下文缺失的已核准载荷；已有目录/文件必须通过原门禁。
     if (-not (Test-GuardAdmin)) { throw 'Same-account administrator rights are required for Code cache deployment.' }
     $d=Get-GuardState
     if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne $d.UserSid) { throw 'Cannot repair Code cache for a different Windows account.' }
     if ($d.CodeCoverage -notin @('prepared','verified')) { throw 'Code cache repair requires an approved deployment.' }
-    $expectedRoots=@((Join-Path $env:APPDATA 'Claude\claude-code'),(Join-Path $env:LOCALAPPDATA ('Packages\'+$d.Desktop.Family+'\LocalCache\Roaming\Claude\claude-code')))
+    $expectedRoots=@(Get-GuardCodeCacheRoots $d.Desktop)
     if (@(Compare-Object @($expectedRoots|Sort-Object) @($d.CodeGate.Roots|Sort-Object)).Count) { throw 'Code cache roots differ from the approved desktop paths.' }
     $relativeCode=if($d.PSObject.Properties['Reliability']){$d.CodeGate.Version+'\'+$d.CodeGate.CompressedHash.Substring(0,12)+'\claude.exe'}else{$d.CodeGate.Version+'\claude.exe'}
     $expectedPaths=@($expectedRoots|ForEach-Object {Join-Path $_ $relativeCode})
@@ -221,10 +270,11 @@ function Repair-GuardDesktopCodeCache {
         if (-not (Test-Path -LiteralPath $path)) {
             New-Item -ItemType Directory -Path $versionDir -Force|Out-Null
             Copy-Item -LiteralPath $payload -Destination $path
-            Protect-CodeBinary $path
             [IO.File]::WriteAllText((Join-Path $versionDir '.verified'),$d.CodeGate.CompressedHash,[Text.UTF8Encoding]::new($false))
             Write-GuardJson (Join-Path $versionDir '.payload') @{sha256=$d.CodeGate.PayloadHash;size=(Get-Item -LiteralPath $path).Length}
         }
+        # An existing verified payload may still inherit the cache's execution deny.
+        Protect-CodeBinary $path
     }
     Test-CodeCacheGate
     Assert-CodePrepared
@@ -287,12 +337,13 @@ function Get-GuardListener {
 }
 function Assert-GuardCore([switch]$ConfigurationOnly) {
     $d=Get-GuardState
-    $core=Get-GuardPath 'runtime\sing-box.exe'
+    $core=Get-GuardCorePath $d
     $cfg=Get-GuardPath 'private\proxy.json'
     if ((Get-GuardHash $core) -ne $d.CoreHash -or (Get-GuardHash $cfg) -ne $d.ProxyConfigHash) { throw 'Proxy runtime or fixed config changed.' }
     $c=Read-GuardJson $cfg
-    if (@($c.outbounds).Count -ne 1 -or $c.outbounds[0].type -ne 'vless' -or $c.outbounds[0].server -ne $d.ExpectedIp -or $c.route.final -ne 'fixed-vps') { throw 'Fixed outbound invariant failed.' }
-    if($d.PSObject.Properties['Reliability'] -and $d.Reliability.PSObject.Properties['Ipv4Only'] -and $d.Reliability.Ipv4Only) {
+    if((Get-GuardLifecycleValue $d 'ProxyEngine' 'sing-box') -eq 'xray'){Assert-GuardXrayNodePool $c $d}
+    elseif (@($c.outbounds).Count -ne 1 -or $c.outbounds[0].type -ne 'vless' -or $c.outbounds[0].server -ne $d.ExpectedIp -or $c.route.final -ne 'fixed-vps') { throw 'Fixed outbound invariant failed.' }
+    if((Get-GuardLifecycleValue $d 'ProxyEngine' 'sing-box') -eq 'sing-box' -and $d.PSObject.Properties['Reliability'] -and $d.Reliability.PSObject.Properties['Ipv4Only'] -and $d.Reliability.Ipv4Only) {
         if($c.dns.strategy -ne 'ipv4_only' -or @($c.route.rules).Count -ne 2 -or $c.route.rules[0].ip_version -ne 6 -or $c.route.rules[0].action -ne 'reject' -or $c.route.rules[1].action -ne 'resolve' -or $c.route.rules[1].strategy -ne 'ipv4_only'){throw 'IPv4-only proxy invariant failed.'}
     }
     $nic = Get-NetAdapter -Name $d.InterfaceName -ErrorAction Stop
@@ -322,8 +373,9 @@ function Start-GuardProxy([switch]$SupervisorWorker,[datetime]$DeadlineUtc=[date
     try{$held=$mutex.WaitOne(10000)}catch [Threading.AbandonedMutexException]{$held=$true}
     if(-not $held){throw 'Dedicated proxy startup is busy.'}
     if (@(Get-GuardListener).Count) { Assert-GuardCore; return }
-    if ((Get-GuardHash (Get-GuardPath 'runtime\sing-box.exe')) -ne $d.CoreHash -or (Get-GuardHash (Get-GuardPath 'private\proxy.json')) -ne $d.ProxyConfigHash) { throw 'Proxy hash changed.' }
-    $p=Start-Process -FilePath (Get-GuardPath 'runtime\sing-box.exe') -ArgumentList @('run','-c',('"'+(Get-GuardPath 'private\proxy.json')+'"')) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Get-GuardPath 'private\proxy.stdout.log') -RedirectStandardError (Get-GuardPath 'private\proxy.stderr.log')
+    $core=Get-GuardCorePath $d
+    if ((Get-GuardHash $core) -ne $d.CoreHash -or (Get-GuardHash (Get-GuardPath 'private\proxy.json')) -ne $d.ProxyConfigHash) { throw 'Proxy hash changed.' }
+    $p=Start-Process -FilePath $core -ArgumentList @('run','-c',('"'+(Get-GuardPath 'private\proxy.json')+'"')) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Get-GuardPath 'private\proxy.stdout.log') -RedirectStandardError (Get-GuardPath 'private\proxy.stderr.log')
     Write-GuardJson (Get-GuardPath 'private\proxy-process.json') @{Pid=$p.Id;Started=$p.StartTime.ToUniversalTime().ToString('o');SupervisorOwned=[bool]$SupervisorWorker}
     for ($i=0;$i -lt 30;$i++) { if (@(Get-GuardListener).Count) { break }; if ($p.HasExited) { throw 'Dedicated proxy failed to start.' }; Start-Sleep -Milliseconds 100 }
     Assert-GuardCore
@@ -338,14 +390,14 @@ function Stop-GuardProxyEmergency {
     $tracked=Read-GuardJson $path
     $process=Get-CimInstance Win32_Process -Filter "ProcessId=$($tracked.Pid)" -ErrorAction SilentlyContinue
     $running=Get-Process -Id $tracked.Pid -ErrorAction SilentlyContinue
-    if($process -and $running -and $process.ExecutablePath -eq (Get-GuardPath 'runtime\sing-box.exe') -and $running.StartTime.ToUniversalTime().Ticks -eq ([datetime]$tracked.Started).ToUniversalTime().Ticks){Stop-Process -Id $tracked.Pid -ErrorAction SilentlyContinue}
+    if($process -and $running -and $process.ExecutablePath -eq (Get-GuardCorePath) -and $running.StartTime.ToUniversalTime().Ticks -eq ([datetime]$tracked.Started).ToUniversalTime().Ticks){Stop-Process -Id $tracked.Pid -ErrorAction SilentlyContinue}
 }
 function Invoke-GuardProbe([string]$Url,[string]$Proxy='http://127.0.0.1:10818',[int]$MaxTime=12) {
     $out=& (Get-GuardPath 'runtime\network-probe.exe') --silent --show-error --fail --connect-timeout 6 --max-time $MaxTime --proxy $Proxy --noproxy '' $Url 2>$null
     $code=$LASTEXITCODE
     [pscustomobject]@{ExitCode=$code;Body=($out -join "`n")}
 }
-function Resolve-GuardEgressProbes($Cloudflare,$Ipify,[string]$ExpectedIp) {
+function Resolve-GuardEgressProbes($Cloudflare,$Ipify,[string[]]$ExpectedIp) {
     $ip1='';$ip2=''
     if($Cloudflare.ExitCode -eq 0){$ip1=([regex]::Match($Cloudflare.Body,'(?m)^ip=(.+)$')).Groups[1].Value.Trim()}
     if($Ipify.ExitCode -eq 0){try{$ip2=[string](($Ipify.Body|ConvertFrom-Json).ip)}catch{}}
@@ -354,7 +406,7 @@ function Resolve-GuardEgressProbes($Cloudflare,$Ipify,[string]$ExpectedIp) {
         if($value) {
             $parsed=$null
             if([Net.IPAddress]::TryParse($value,[ref]$parsed)) {
-                if($value -ne $ExpectedIp){throw 'Fixed egress mismatch; protected traffic must stop.'}
+                if($value -notin $ExpectedIp){throw 'Fixed egress mismatch; protected traffic must stop.'}
                 $valid+=$value
             }
         }
@@ -367,7 +419,7 @@ function Test-GuardEgress {
     $d=Get-GuardState
     $a=Invoke-GuardProbe 'https://www.cloudflare.com/cdn-cgi/trace'
     $b=Invoke-GuardProbe 'https://api.ipify.org?format=json'
-    try {Resolve-GuardEgressProbes $a $b $d.ExpectedIp}
+    try {Resolve-GuardEgressProbes $a $b @(Get-GuardExpectedIps $d)}
     catch {
         if($_.Exception.Message -match '^Neutral egress probes failed'){throw ('Neutral egress probes failed; desktop startup refused. Cloudflare exit='+$a.ExitCode+'; Ipify exit='+$b.ExitCode+'.')}
         throw

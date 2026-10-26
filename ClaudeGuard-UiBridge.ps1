@@ -10,6 +10,16 @@ if(-not $ActionId){$ActionId=[guid]::NewGuid().ToString('N')}
 if($Action -ne 'Diagnose'){Register-GuardUiAction $ActionId $Action}
 $deadline=[datetime]::UtcNow.AddSeconds(150)
 $result=[ordered]@{Success=$false;Pending=$false;OperationId=$null;Phase=$null;Message='';Started=$false;SessionVerified=$false;DesktopPid=$null;FailureKind=$null;ApprovedVersion=$null;InstalledVersion=$null;SupervisorStatus=$null;SupervisorVerified=$false;SupervisorTime=$null;SupervisorRunId=$null;ApiTransport=$null;ActionId=$ActionId}
+function Assert-GuardUiRetryWindow($Snapshot,[datetimeoffset]$Now=[datetimeoffset]::UtcNow) {
+    # 仅使用已核验身份和时效的快照；不能把旧记录或未知进程当成节点故障。
+    if($Snapshot.Ready -or $Snapshot.Kind -notin @('UpstreamUnavailable','Checking')){return}
+    $h=$Snapshot.Health
+    if(-not $h -or [int]$h.ConsecutiveFailures -lt 1){return}
+    $next=[datetimeoffset]::MinValue
+    if([datetimeoffset]::TryParse([string]$h.NextProbe,[ref]$next) -and $next -gt $Now.AddSeconds(3)){
+        throw ('UpstreamUnavailable: 固定节点连接检查失败；后台将在 '+$next.ToLocalTime().ToString('HH:mm:ss')+' 自动重试。请检查专用节点服务和网络。')
+    }
+}
 function Wait-VersionMaintenance([string]$Id,$Installer=$null) {
     $watch=[Diagnostics.Stopwatch]::StartNew()
     do {
@@ -37,6 +47,12 @@ try {
     $result.InstalledVersion=(Get-GuardDesktop).Version
     $result.SessionVerified=Test-GuardLocalCodeAcceptance
     $existing=@(Get-GuardDesktopProcesses)
+    if($Action -in @('Start','Check','Login')){
+        $maintenanceState=Get-GuardMaintenanceSnapshot
+        if(-not ($maintenanceState.Active -or $maintenanceState.Interrupted -or ($maintenanceState.Operation -and $maintenanceState.Operation.RecoveryRequired))){
+            Assert-GuardUiRetryWindow (Get-GuardSupervisorSnapshot)
+        }
+    }
     if($Action -eq 'Update') {
         $snapshot=Get-GuardMaintenanceSnapshot
         if($snapshot.Active){
@@ -141,6 +157,7 @@ try {
         $result.Message='Claude 已自动更新：'+$result.ApprovedVersion+' → '+$result.InstalledVersion+'。新版本防护待迁移，请完全退出 Claude 后点击“维护版本”。'
     }
     elseif($detail -match 'SafetyHold|safety hold|Fixed egress mismatch'){$result.FailureKind='SafetyHold';$result.Message='出口或运行防护异常，专用网络已暂停。请退出 Claude 后点击“维护版本”，核验完成再使用。'}
+    elseif($detail -match '^UpstreamUnavailable: '){$result.FailureKind='UpstreamUnavailable';$result.Message=$detail.Substring('UpstreamUnavailable: '.Length)}
     elseif($detail -match 'SupervisorUnavailable'){$result.FailureKind='SupervisorUnavailable';$result.Message='后台守护尚未恢复，不能确认防护准备完成。已打开的会话保留；请等待自动恢复或点击“重新检查”。'}
     elseif($detail -match 'already running|Exit Claude'){ $result.FailureKind='UnprotectedInstance';$result.Message='Claude 已从其他入口运行或尚未退出。请完全退出 Claude 后重试。' }
     elseif($detail -match 'execution gate|Code cache'){ $result.FailureKind='CodeCachePermissions';$result.Message='本地 Code 缓存的执行防护需要维护，已停止启动。请完全退出 Claude 后点击“维护版本”。' }

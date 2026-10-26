@@ -399,6 +399,23 @@ function Sync-GuardMaintenanceUiResult([string]$OperationId) {
         $result
     }
 }
+function Restore-GuardCodeMigrationPermissions($Backup) {
+    $current=Get-GuardState
+    $candidatePaths=@(Get-GuardLifecycleValue $Backup 'CandidateCodePaths' @())
+    foreach($path in $candidatePaths){
+        if($path -notin @($current.CodePaths)){throw 'Maintenance rollback candidate ACL path is not approved.'}
+        if($path -notin @($Backup.Deployment.CodePaths) -and (Test-Path -LiteralPath $path)){
+            $acl=[Security.AccessControl.FileSecurity]::new();$acl.SetAccessRuleProtection($false,$false)
+            Set-CodeAccessOnlyAcl $path $acl
+        }
+    }
+    foreach($entry in $Backup.CodeAcls){
+        if($entry.Path -notin (@($Backup.Deployment.CodePaths)+$candidatePaths)){throw 'Maintenance rollback ACL path is not approved.'}
+        if(Test-Path -LiteralPath $entry.Path){$acl=[Security.AccessControl.FileSecurity]::new();$acl.SetSecurityDescriptorSddlForm($entry.Sddl,[Security.AccessControl.AccessControlSections]::Access);Set-CodeAccessOnlyAcl $entry.Path $acl}
+    }
+    $gateBackup=Get-GuardLifecycleValue $Backup 'GateBackup'
+    if($gateBackup){Write-GuardJson (Get-GuardPath 'private\code-gate-backup.json') $gateBackup}
+}
 function Restore-GuardMaintenanceBackup($Operation) {
     if(-not (Test-GuardAdmin)){throw 'Same-account administrator recovery is required.'}
     $d=Get-GuardState
@@ -412,11 +429,12 @@ function Restore-GuardMaintenanceBackup($Operation) {
     if(-not $Operation.SupervisorSuspended -and -not $Operation.BaselineChanged){return}
     $backup=Read-GuardJson $Operation.BackupFile
     if($backup.Deployment.UserSid -ne $d.UserSid -or $backup.Deployment.ProxyUrl -ne $d.ProxyUrl -or $backup.Deployment.ExpectedIp -ne $d.ExpectedIp){throw 'Maintenance recovery escaped the approved account/network boundary.'}
+    if((Get-GuardLifecycleValue $backup.Deployment 'ProxyEngine' 'sing-box') -ne (Get-GuardLifecycleValue $d 'ProxyEngine' 'sing-box') -or ((Get-GuardExpectedIps $backup.Deployment|Sort-Object) -join ',') -ne ((Get-GuardExpectedIps $d|Sort-Object) -join ',')){throw 'Maintenance recovery changed the approved node pool.'}
     if($Operation.SupervisorSuspended){$null=Suspend-GuardSupervisorTask -State $d -TimeoutSeconds 30}
     Stop-GuardProxyEmergency
+    Restore-GuardCodeMigrationPermissions $backup
     Write-GuardJson (Get-GuardPath 'private\deployment.json') $backup.Deployment
     if($Operation.ProxyBackup){Copy-Item -LiteralPath $Operation.ProxyBackup -Destination (Get-GuardPath 'private\proxy.json')}
-    foreach($entry in $backup.CodeAcls){if($entry.Path -notin @($backup.Deployment.CodePaths)){throw 'Maintenance rollback ACL path is not approved.'};if(Test-Path -LiteralPath $entry.Path){$acl=[Security.AccessControl.FileSecurity]::new();$acl.SetSecurityDescriptorSddlForm($entry.Sddl,[Security.AccessControl.AccessControlSections]::Access);Set-CodeAccessOnlyAcl $entry.Path $acl}}
     if($Operation.TaskBackup){$null=Register-ScheduledTask -TaskName $backup.Deployment.Reliability.TaskName -TaskPath '\' -Xml (Get-Content -LiteralPath $Operation.TaskBackup -Raw) -Force}
     if($Operation.BaselineChanged){Write-GuardJson (Get-GuardPath 'private\safety-hold.json') @{Time=[datetime]::UtcNow.ToString('o');Reason='Interrupted maintenance recovered; reviewed maintenance is required before protected launch.'}}
     $marker=Get-GuardPath 'private\maintenance.json'

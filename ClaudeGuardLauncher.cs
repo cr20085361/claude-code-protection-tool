@@ -100,7 +100,7 @@ public sealed class ClaudeGuardWindow : Form {
                 }
             }
         };
-        var footer=new Label {Text="专用网络由后台守护恢复；软件升级通过“维护版本”核验。",Location=new Point(26,242),AutoSize=true,ForeColor=Color.FromArgb(70,79,91)};
+        var footer=new Label {Text="专用节点由后台持续检查；节点池自动选择可用连接。",Location=new Point(26,242),AutoSize=true,ForeColor=Color.FromArgb(70,79,91)};
         networkHealth.SetBounds(26,266,608,24); networkHealth.Font=new Font("Microsoft YaHei UI",9);networkHealth.Text="后台守护状态待确认。";
         Controls.AddRange(new Control[]{title,toolBuildVersion,hint,status,launch,check,login,report,maintenance,footer,networkHealth});
         var divider=new Label{BackColor=Color.FromArgb(219,225,231),Location=new Point(26,300),Size=new Size(608,1)};
@@ -162,7 +162,7 @@ public sealed class ClaudeGuardWindow : Form {
         Guid id;if(d==null || d.SchemaVersion!=1 || !Guid.TryParseExact(d.Id,"N",out id))throw new InvalidDataException("更新记录身份无效。");
         var canonical=Path.Combine(root,"private","desktop-update-"+d.Id+".json");
         if(File.Exists(canonical)){var saved=new JavaScriptSerializer().Deserialize<DesktopUpdateResult>(ReadSharedText(canonical));if(saved==null || saved.SchemaVersion!=1 || saved.Id!=d.Id)throw new InvalidDataException("更新关联无效。");d=saved;}
-        if(d.PackageFile!=Path.Combine(root,"private","desktop-package-"+d.Id+".msix"))throw new InvalidDataException("更新文件路径无效。");
+        if(String.IsNullOrEmpty(d.PackageFile) || !String.Equals(Path.GetFullPath(d.PackageFile),Path.GetFullPath(Path.Combine(root,"private","desktop-package-"+d.Id+".msix")),StringComparison.OrdinalIgnoreCase))throw new InvalidDataException("更新文件路径无效。");
         if(IsDesktopUpdateActive(d) && d.Status!="AwaitingReadiness" && !ProcessMatches(d.WorkerPid,d.WorkerStarted,d.WorkerPath)){d.Status="Interrupted";d.Message=String.IsNullOrEmpty(d.MaintenanceId)?"下载已中断，可重新下载；未改变已安装版本。":"更新中断，需要恢复。请点击“维护版本”。";}
         if(d.Status=="Downloading" && File.Exists(d.PackageFile+".part"))d.PackageBytes=new FileInfo(d.PackageFile+".part").Length;
         return d;
@@ -341,7 +341,7 @@ public sealed class ClaudeGuardWindow : Form {
             RenderMaintenanceCompletion(operation,health,deployment,failure==null);
             networkHealth.ForeColor=Color.FromArgb(163,59,42);
             switch(health.Status) {
-                case "Healthy": networkHealth.Text="后台守护健康，固定出口检查通过。";networkHealth.ForeColor=Color.FromArgb(24,106,65);RestoreGuardMessage();break;
+                case "Healthy": networkHealth.Text=deployment.ExpectedIps!=null?"后台守护健康，已核准节点池（"+deployment.ExpectedIps.Length+" 条）出口检查通过。":"后台守护健康，固定出口检查通过。";networkHealth.ForeColor=Color.FromArgb(24,106,65);RestoreGuardMessage();break;
                 case "ProbeDegraded": networkHealth.Text="一个检测站暂不可用，另一站已确认固定出口。";networkHealth.ForeColor=Color.FromArgb(145,99,20);RestoreGuardMessage();break;
                 case "SafetyHold":
                     networkHealth.Text="网络防护已暂停，请退出 Claude 后进行版本维护。";
@@ -368,8 +368,8 @@ public sealed class ClaudeGuardWindow : Form {
         } catch {}
         if(check.Enabled) {
             guardWarning=true;
-            status.Text=IsClaudeOpen()?"Claude 已打开；后台守护正在恢复。\n当前会话保留，恢复完成后状态会自动更新。":"后台守护正在恢复，尚不能确认防护准备完成。\n请等待自动恢复或点击“重新检查”。";
-            status.ForeColor=Color.FromArgb(145,99,20);
+            status.Text=reason+"\n"+(IsClaudeOpen()?"当前会话保留；恢复后状态会自动更新。":"检查通过后才能打开 Claude。恢复后可重新检查。");
+            status.ForeColor=Color.FromArgb(163,59,42);
         }
     }
     void RestoreGuardMessage() {
@@ -403,13 +403,22 @@ public sealed class ClaudeGuardWindow : Form {
             identity.ShellPath!=d.Reliability.ShellPath || !String.Equals(identity.ScriptPath,Path.GetFullPath(Path.Combine(Path.GetDirectoryName(d.Reliability.HostPath),"..",d.Reliability.SupervisorScript)),StringComparison.OrdinalIgnoreCase))
             return "后台守护已停止或身份未确认，正在等待自动恢复。";
         if(h.Status=="SafetyHold")return "网络防护已暂停，请退出 Claude 后进行维护。";
-        if(h.Status!="Healthy" && h.Status!="ProbeDegraded")return "后台守护检查尚未完成："+h.Status+"。请重新检查。";
+        if(h.Status=="UpstreamUnavailable" || (h.Status=="Checking" && h.ConsecutiveFailures>0)) {
+            DateTimeOffset next;
+            string retry=DateTimeOffset.TryParse(h.NextProbe,out next) && next>now?"下次重试 "+next.ToLocalTime().ToString("HH:mm:ss")+"。":"后台正在重试。";
+            return "固定节点连接检查失败，"+retry+"请检查节点服务和网络。";
+        }
+        if(h.Status=="Backoff")return "专用代理反复退出，后台正在退避重试。";
+        if(h.Status=="InterfaceUnavailable")return "绑定网卡不可用，请恢复原网络后重新检查。";
+        if(h.Status=="UpgradeRequired")return "Claude 版本已变化，请退出客户端后进行版本维护。";
+        if(h.Status!="Healthy" && h.Status!="ProbeDegraded")return "后台守护检查尚未完成，正在等待自动恢复。";
         if(!DateTimeOffset.TryParse(h.SupervisorStarted,out started) || !DateTimeOffset.TryParse(h.LastSafetyCheck,out safety) || !DateTimeOffset.TryParse(h.LastEgressCheck,out egress) ||
             safety<started || egress<started || (now-safety).TotalSeconds < -5 || (now-safety).TotalSeconds>120 || (now-egress).TotalSeconds < -5 || (now-egress).TotalSeconds>120)
             return "本次守护检查未完成或已过期，正在等待恢复。";
-        var e=h.LastVerifiedEgress;if(e==null || e.VerifiedProbeCount<1 ||
-            (!String.IsNullOrEmpty(e.CloudflareIp) && e.CloudflareIp!=d.ExpectedIp) || (!String.IsNullOrEmpty(e.IpifyIp) && e.IpifyIp!=d.ExpectedIp) ||
-            (e.CloudflareIp!=d.ExpectedIp && e.IpifyIp!=d.ExpectedIp))return "本次固定出口尚未确认，请重新检查。";
+        string[] expected=d.ExpectedIps??new string[]{d.ExpectedIp};
+        var e=h.LastVerifiedEgress;if(expected.Length==0 || Array.Exists(expected,delegate(string ip){System.Net.IPAddress parsed;return !System.Net.IPAddress.TryParse(ip,out parsed);}) || e==null || e.VerifiedProbeCount<1 ||
+            (!String.IsNullOrEmpty(e.CloudflareIp) && Array.IndexOf(expected,e.CloudflareIp)<0) || (!String.IsNullOrEmpty(e.IpifyIp) && Array.IndexOf(expected,e.IpifyIp)<0) ||
+            (Array.IndexOf(expected,e.CloudflareIp)<0 && Array.IndexOf(expected,e.IpifyIp)<0))return "本次核准节点出口尚未确认，请重新检查。";
         return null;
     }
     async Task RunAction(string action) {
@@ -417,6 +426,7 @@ public sealed class ClaudeGuardWindow : Form {
         actionBusy=true;activeActionKind=action;if(action=="Update")maintenanceRequestStarted=DateTimeOffset.UtcNow;else observedMaintenanceId=null;
         string actionId=Guid.NewGuid().ToString("N");activeActionId=actionId;guardWarning=false;
         launch.Enabled=check.Enabled=login.Enabled=maintenance.Enabled=false;
+        lastSuccessMessage=null;
         status.ForeColor=Color.FromArgb(70,79,91); status.Text=action=="Update"?"正在核验官方版本和防护配置……\nWindows 提示管理员授权时，请核对后允许。":"正在检查连接，请稍候……\n检查通过才会打开 Claude。";
         try {
             var result=await Task.Run(delegate {
@@ -464,10 +474,10 @@ public sealed class ClaudeGuardWindow : Form {
     }
     public class UiResult {public bool Pending {get;set;}public string OperationId {get;set;} public bool Success {get;set;} public string Message {get;set;} public bool SessionVerified {get;set;} public bool SupervisorVerified {get;set;} public string ActionId {get;set;} public ApiResult ApiTransport {get;set;} }
     public class ApiResult {public int CurlExitCode {get;set;}}
-    public class HealthResult { public int SchemaVersion {get;set;} public string Time {get;set;} public string Status {get;set;} public string RunId {get;set;} public int HostPid {get;set;} public string HostStarted {get;set;} public int SupervisorPid {get;set;} public string SupervisorStarted {get;set;} public string LastSafetyCheck {get;set;} public string LastEgressCheck {get;set;} public EgressResult LastVerifiedEgress {get;set;} }
+    public class HealthResult { public int SchemaVersion {get;set;} public string Time {get;set;} public string Status {get;set;} public string RunId {get;set;} public int HostPid {get;set;} public string HostStarted {get;set;} public int SupervisorPid {get;set;} public string SupervisorStarted {get;set;} public string LastSafetyCheck {get;set;} public string LastEgressCheck {get;set;} public EgressResult LastVerifiedEgress {get;set;} public int ConsecutiveFailures {get;set;} public string NextProbe {get;set;} }
     public class EgressResult {public int VerifiedProbeCount {get;set;}public string CloudflareIp {get;set;}public string IpifyIp {get;set;}}
     public class HostIdentity {public string RunId {get;set;} public int HostPid {get;set;} public string HostStarted {get;set;} public int SupervisorPid {get;set;} public string SupervisorStarted {get;set;}public string ShellPath {get;set;}public string ScriptPath {get;set;}}
-    public class DeploymentResult {public ReliabilityResult Reliability {get;set;}public DesktopResult Desktop {get;set;}public CodeResult CodeGate {get;set;}public string ExpectedIp {get;set;}}
+    public class DeploymentResult {public ReliabilityResult Reliability {get;set;}public DesktopResult Desktop {get;set;}public CodeResult CodeGate {get;set;}public string ExpectedIp {get;set;}public string[] ExpectedIps {get;set;}}
     public class DesktopResult {public string Path {get;set;}public string Version {get;set;}}
     public class CodeResult {public string Version {get;set;}}
     public class ReliabilityResult {public string HostPath {get;set;}public string ShellPath {get;set;}public string SupervisorScript {get;set;}}

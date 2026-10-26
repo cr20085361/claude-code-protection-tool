@@ -1,4 +1,10 @@
 # 所有入口使用同一就绪契约；旧健康文件或存活代理不能作为守护健康证据。
+function Get-GuardExpectedIps($State) {
+    $values=@(if($State.PSObject.Properties['ExpectedIps']){$State.ExpectedIps}else{$State.ExpectedIp})
+    if(-not $values.Count){throw 'Approved egress list is empty.'}
+    foreach($value in $values){$ip=$null;if(-not [Net.IPAddress]::TryParse([string]$value,[ref]$ip)){throw 'Approved egress address is invalid.'}}
+    $values
+}
 function Get-GuardHealthAssessment {
     param($Health,$State,[datetimeoffset]$NowUtc=[datetimeoffset]::UtcNow,[string]$TaskState='Unknown',[scriptblock]$IdentityVerifier)
     $answer=[ordered]@{Ready=$false;Kind='SupervisorUnavailable';Reason='后台守护尚未确认';Health=$Health;AgeSeconds=$null}
@@ -20,8 +26,9 @@ function Get-GuardHealthAssessment {
         if(-not $Health.PSObject.Properties['LastVerifiedEgress'] -or -not $Health.LastVerifiedEgress){throw '本次固定出口结果缺失'}
         $e=$Health.LastVerifiedEgress
         if([int]$e.VerifiedProbeCount -lt 1){throw '本次固定出口未确认'}
-        foreach($name in @('CloudflareIp','IpifyIp')){if($e.PSObject.Properties[$name] -and $e.$name -and $e.$name -ne $State.ExpectedIp){$answer.Kind='SafetyHold';throw 'Fixed egress mismatch'}}
-        if(-not (@($e.CloudflareIp,$e.IpifyIp) -contains $State.ExpectedIp)){throw '本次固定出口结果不匹配'}
+        $expected=@(Get-GuardExpectedIps $State)
+        foreach($name in @('CloudflareIp','IpifyIp')){if($e.PSObject.Properties[$name] -and $e.$name -and $e.$name -notin $expected){$answer.Kind='SafetyHold';throw 'Fixed egress mismatch'}}
+        if(-not (@($e.CloudflareIp,$e.IpifyIp)|Where-Object {$_ -and $_ -in $expected})){throw '本次固定出口结果不匹配'}
         $answer.Ready=$true;$answer.Kind=[string]$Health.Status;$answer.Reason='后台守护已确认'
     } catch {$answer.Reason=$_.Exception.Message}
     [pscustomobject]$answer

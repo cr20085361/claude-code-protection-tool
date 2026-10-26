@@ -69,6 +69,7 @@ if($Install) {
         if((Get-GuardHash (Get-GuardPath 'private\deployment.json')) -ne $stage.PreviousStateHash){throw 'Deployment changed after review.'}
         $candidate=$stage.Candidate
         if($candidate.UserSid -ne $d.UserSid -or $candidate.ProxyUrl -ne $d.ProxyUrl -or $candidate.ExpectedIp -ne $d.ExpectedIp -or $candidate.ConfigDir -ne $d.ConfigDir -or $candidate.CoreHash -ne $d.CoreHash){throw 'Migration escaped approved network boundaries.'}
+        if((Get-GuardLifecycleValue $candidate 'ProxyEngine' 'sing-box') -ne (Get-GuardLifecycleValue $d 'ProxyEngine' 'sing-box') -or ((Get-GuardExpectedIps $candidate|Sort-Object) -join ',') -ne ((Get-GuardExpectedIps $d|Sort-Object) -join ',')){throw 'Migration changed the approved node pool.'}
         $configStage=Assert-PrivateFile $stage.ConfigStage '^proxy-stage-[0-9a-f]{32}\.json$'
         if((Get-GuardHash (Get-GuardPath 'private\proxy.json')) -ne $d.ProxyConfigHash -or (Get-GuardHash $configStage) -ne $candidate.ProxyConfigHash){throw 'Reviewed proxy configuration changed.'}
         $expectedConfig=New-GuardIPv4Config (Read-GuardJson (Get-GuardPath 'private\proxy.json'))
@@ -80,7 +81,7 @@ if($Install) {
         if((Get-GuardHash $candidate.CodeGate.ArchivePath) -ne $candidate.CodeGate.ArchiveHash){throw 'Engine metadata changed after review.'}
         if((Get-GuardHash $stage.PayloadPath).ToLowerInvariant() -ne $candidate.CodeGate.PayloadHash.ToLowerInvariant()){throw 'Reviewed Code payload changed.'}
         Assert-AnthropicSignature $stage.PayloadPath
-        $expectedRoots=@((Join-Path $env:APPDATA 'Claude\claude-code'),(Join-Path $env:LOCALAPPDATA ('Packages\'+$current.Family+'\LocalCache\Roaming\Claude\claude-code')))
+        $expectedRoots=@(Get-GuardCodeCacheRoots $current)
         if(@(Compare-Object @($expectedRoots|Sort-Object) @($candidate.CodeGate.Roots|Sort-Object)).Count){throw 'Unexpected Code cache roots.'}
         $expectedPaths=@($expectedRoots|ForEach-Object {Join-Path $_ ($candidate.CodeGate.Version+'\'+$candidate.CodeGate.CompressedHash.Substring(0,12)+'\claude.exe')})
         if(@(Compare-Object @($expectedPaths|Sort-Object) @($candidate.CodePaths|Sort-Object)).Count){throw 'Unexpected Code binary paths.'}
@@ -118,7 +119,8 @@ if($Install) {
             $backupEnabled=$desktopTaskRestore.WasEnabled;$backupRunning=$desktopTaskRestore.WasRunning
         }
         $rollback=Get-GuardPath ('private\upgrade-backup-'+$stage.Id+'.json')
-        Write-GuardJson $rollback @{Deployment=$d;Firewall=$priorRules;WasEnabled=$backupEnabled;WasRunning=$backupRunning;CodeAcls=@($d.CodePaths|Where-Object {Test-Path $_}|ForEach-Object { @{Path=$_;Sddl=(Get-Acl $_).Sddl} });StageHash=$StageHash}
+        $aclPaths=@(@($d.CodePaths)+@($expectedPaths)|Sort-Object -Unique)
+        Write-GuardJson $rollback @{Deployment=$d;Firewall=$priorRules;WasEnabled=$backupEnabled;WasRunning=$backupRunning;CodeAcls=@($aclPaths|Where-Object {Test-Path -LiteralPath $_}|ForEach-Object { @{Path=$_;Sddl=(Get-Acl -LiteralPath $_).Sddl} });CandidateCodePaths=$expectedPaths;GateBackup=(Read-GuardJson (Get-GuardPath 'private\code-gate-backup.json'));StageHash=$StageHash}
         $configBackup=Get-GuardPath ('private\proxy-before-'+$stage.Id+'.json')
         Copy-Item -LiteralPath (Get-GuardPath 'private\proxy.json') -Destination $configBackup
         if($OperationId){$null=Set-GuardMaintenanceOperation $OperationId @{BackupFile=$rollback;BackupHash=(Get-GuardHash $rollback);ProxyBackup=$configBackup;ProxyBackupHash=(Get-GuardHash $configBackup)}}
@@ -143,6 +145,16 @@ if($Install) {
         $fresh=Read-GuardJson (Get-GuardPath 'private\firewall.json')
         $fresh.Rules=@($fresh.Rules)+@($priorRules.Rules|Where-Object {$_.Name -notin @($fresh.Rules.Name)})
         Write-GuardJson (Get-GuardPath 'private\firewall.json') $fresh
+        # Preserve the pre-migration ACL of newly covered cache roots for removal/rollback.
+        $gateBackupPath=Get-GuardPath 'private\code-gate-backup.json'
+        $gateBackup=Read-GuardJson $gateBackupPath
+        foreach($root in $expectedRoots){
+            if($root -notin @($gateBackup.Roots.Path)){
+                $existed=Test-Path -LiteralPath $root
+                $gateBackup.Roots+=@([pscustomobject]@{Path=$root;Existed=$existed;Sddl=$(if($existed){(Get-Acl -LiteralPath $root).Sddl}else{$null})})
+            }
+        }
+        Write-GuardJson $gateBackupPath $gateBackup
         foreach($root in $expectedRoots){
             if(-not (Test-Path -LiteralPath $root)){
                 New-Item -ItemType Directory -Path $root -Force|Out-Null
@@ -200,7 +212,10 @@ if($Install) {
             } elseif($priorTaskXml) {
                 # 保留无入口 OperationId 的命令行维护兼容；精确停止后恢复旧任务。
                 $null=Suspend-GuardSupervisorTask -State (Get-GuardState) -TimeoutSeconds 30
-                if($baselineChanged){Write-GuardJson (Get-GuardPath 'private\deployment.json') $oldState;Stop-GuardProxyEmergency;Write-GuardJson (Get-GuardPath 'private\safety-hold.json') @{Time=(Get-Date -Format o);Reason='Reviewed maintenance failed; reviewed migration required.'}}
+                if($baselineChanged){
+                    Restore-GuardCodeMigrationPermissions (Read-GuardJson $rollback)
+                    Write-GuardJson (Get-GuardPath 'private\deployment.json') $oldState;Stop-GuardProxyEmergency;Write-GuardJson (Get-GuardPath 'private\safety-hold.json') @{Time=(Get-Date -Format o);Reason='Reviewed maintenance failed; reviewed migration required.'}
+                }
                 if($configBackup){Copy-Item -LiteralPath $configBackup -Destination (Get-GuardPath 'private\proxy.json')}
                 $null=Register-ScheduledTask -TaskName $d.Reliability.TaskName -Xml $priorTaskXml -Force
                 if($priorTaskSnapshot.WasEnabled){$null=Enable-ScheduledTask -TaskName $d.Reliability.TaskName;if($priorTaskSnapshot.WasRunning){Start-ScheduledTask -TaskName $d.Reliability.TaskName}}
@@ -258,7 +273,7 @@ if(-not (Test-Path $payload)) {
 }
 Assert-AnthropicSignature $payload
 Assert-PreparationBudget
-$roots=@($d.CodeGate.Roots)
+$roots=@(Get-GuardCodeCacheRoots $current)
 $candidate=$d|ConvertTo-Json -Depth 30|ConvertFrom-Json
 $candidate.Desktop=$current
 $candidate.CodePaths=@($roots|ForEach-Object {Join-Path $_ ($m.desktopCodeVersion+'\'+$m.platform.checksum.Substring(0,12)+'\claude.exe')})
@@ -271,8 +286,7 @@ if(-not $sameVersion){
 $candidate|Add-Member -NotePropertyName Reliability -NotePropertyValue (New-GuardReliability $d.Reliability) -Force
 $configStage=Get-GuardPath ('private\proxy-stage-'+$id+'.json')
 Write-GuardJson $configStage (New-GuardIPv4Config (Read-GuardJson (Get-GuardPath 'private\proxy.json')))
-$check=& (Get-GuardPath 'runtime\sing-box.exe') check -c $configStage 2>&1
-if($LASTEXITCODE -ne 0){throw 'IPv4-only configuration check failed; details suppressed.'}
+Test-GuardProxyConfiguration $configStage $d
 $candidate.ProxyConfigHash=Get-GuardHash $configStage
 $files=@('ClaudeGuard.psm1','ClaudeGuard-Lifecycle.ps1','ClaudeGuard-Health.ps1','ClaudeSupervisorHost.cs','runtime\ClaudeSupervisorHost.exe','runtime\ClaudeProGuard.exe','private\launcher-paths.txt','ClaudeCodeGate.psm1','ClaudeGuard-Supervisor-v2.ps1','ClaudeGuard-Runtime.psm1','Read-ClaudeProcessEnvironment.py','ClaudeGuard-UiBridge.ps1','Update-ClaudeGuard.ps1','Repair-ClaudeCodeContext-Admin.ps1','Install-ClaudeGuard.ps1','Read-DesktopCodeManifest.cjs','Expand-VerifiedCode.cjs','ClaudeGuard-VersionInfo.psm1','Get-ClaudeVersionInfo.ps1','ClaudeGuard-DesktopUpdate.psm1','Invoke-ClaudeDesktopUpdate.ps1')
 $stage=[ordered]@{Id=$id;Created=(Get-Date -Format o);PreviousStateHash=(Get-GuardHash (Get-GuardPath 'private\deployment.json'));Candidate=$candidate;PayloadPath=$payload;Manifest=$m;ConfigStage=$configStage;ScriptHashes=@($files|ForEach-Object { @{Name=$_;Hash=(Get-GuardHash (Get-GuardPath $_))} })}

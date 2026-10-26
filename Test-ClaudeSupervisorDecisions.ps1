@@ -31,7 +31,7 @@ function Get-FixtureSource([string]$Text,[switch]$Worker) {
     $Text
 }
 $body=Get-FixtureSource $source -Worker
-foreach($scenario in @('egress-drift','runtime-unsafe','tls-disabled','active-code-probe-failure','idle-probe-failure','existing-safety-hold','healthy-current-run','maintenance-before-hash','persisted-restart-budget','failed-start-persisted','persisted-egress-backoff','persisted-egress-success','stale-health','slow-egress','fatal-recovery-state','slow-cycle-not-resume','resume-keeps-egress-backoff','periodic-check-retains-valid-result')) {
+foreach($scenario in @('egress-drift','runtime-unsafe','tls-disabled','active-code-probe-failure','idle-probe-failure','existing-safety-hold','healthy-current-run','new-version-available','maintenance-before-hash','persisted-restart-budget','failed-start-persisted','persisted-egress-backoff','persisted-egress-success','stale-health','slow-egress','fatal-recovery-state','slow-cycle-not-resume','resume-keeps-egress-backoff','periodic-check-retains-valid-result')) {
     $fixture=Get-GuardPath ('private\supervisor-fixture-'+[guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path (Join-Path $fixture 'private') -Force|Out-Null
     $wrapper=Join-Path $fixture 'runner.ps1'
@@ -80,6 +80,7 @@ function Test-GuardEgress{
     [pscustomobject]@{Time=[datetime]::UtcNow.ToString('o');ProbeDegraded=$false;VerifiedProbeCount=2}
 }
 Write-GuardJson (Get-GuardPath 'private\proxy-process.json') @{Pid=123;Started=[datetime]::UtcNow.ToString('o')}
+if($Scenario -eq 'new-version-available'){Write-GuardJson (Get-GuardPath 'private\version-update-status.json') @{SchemaVersion=1;Status='Checked';CheckedAt=[datetime]::UtcNow.ToString('o');LastSuccess=@{LatestDesktopVersion='99.0.0'}}}
 if($Scenario -eq 'existing-safety-hold'){Write-GuardJson (Get-GuardPath 'private\safety-hold.json') @{Reason='previous-fixed-egress-mismatch'}}
 if($Scenario -eq 'maintenance-before-hash'){Write-GuardJson (Get-GuardPath 'private\maintenance.json') @{Until=[datetime]::UtcNow.AddMinutes(2).ToString('o')}}
 if(-not $SecondRun -and $Scenario -in @('active-code-probe-failure','idle-probe-failure','persisted-restart-budget','persisted-egress-backoff','persisted-egress-success','resume-keeps-egress-backoff')){
@@ -107,6 +108,7 @@ if($Scenario -eq 'fatal-recovery-state'){[IO.File]::WriteAllText((Get-GuardPath 
             'idle-probe-failure' {$health.Status -eq 'UpstreamUnavailable' -and $counts.StoppedProxy -eq 1 -and -not $held -and $health.ConsecutiveFailures -eq 3}
             'existing-safety-hold' {$health.Status -eq 'SafetyHold' -and $held -and $counts.StoppedProxy -eq 0}
             'healthy-current-run' {$health.Status -eq 'Healthy' -and $counts.PolicyCalls -eq 1 -and $counts.EgressCalls -eq 1 -and $health.LastSafetyCheck -and $health.LastEgressCheck}
+            'new-version-available' {$health.Status -eq 'Healthy' -and -not $held -and $counts.StoppedRuntime -eq 0 -and $counts.StoppedProxy -eq 0}
             'maintenance-before-hash' {$health.Status -eq 'Maintenance' -and -not $held -and $counts.StoppedProxy -eq 0 -and $counts.StartedProxy -eq 0 -and $counts.PolicyCalls -eq 0}
             'persisted-restart-budget' {$health.Status -eq 'Backoff' -and $counts.StartedProxy -eq 0 -and @($recovery.RestartTimes).Count -eq 3}
             'failed-start-persisted' {$health.Status -eq 'ProtectionError' -and $counts.StartedProxy -eq 1 -and @($recovery.RestartTimes).Count -eq 1}
@@ -136,7 +138,7 @@ if($Scenario -eq 'fatal-recovery-state'){[IO.File]::WriteAllText((Get-GuardPath 
         }
         $results+=@{Scenario=$scenario;Passed=$true;Status=$health.Status;StopProxyCalls=$counts.StoppedProxy;StopRuntimeCalls=$counts.StoppedRuntime;StartProxyCalls=$counts.StartedProxy;EgressCalls=$counts.EgressCalls}
     }finally{
-        foreach($name in @('private\proxy-process.json','private\supervisor-events.jsonl','private\supervisor-health.json','private\safety-hold.json','private\runtime-safety.json','private\last-good-egress.json','private\maintenance.json','private\proxy-recovery.json','counts.json','runner.ps1')){Remove-Item -LiteralPath (Join-Path $fixture $name) -ErrorAction SilentlyContinue}
+        foreach($name in @('private\version-update-status.json','private\proxy-process.json','private\supervisor-events.jsonl','private\supervisor-health.json','private\safety-hold.json','private\runtime-safety.json','private\last-good-egress.json','private\maintenance.json','private\proxy-recovery.json','counts.json','runner.ps1')){Remove-Item -LiteralPath (Join-Path $fixture $name) -ErrorAction SilentlyContinue}
         Remove-Item -LiteralPath (Join-Path $fixture 'private'),$fixture -ErrorAction SilentlyContinue
     }
 }
@@ -145,6 +147,8 @@ $fixture=Get-GuardPath ('private\supervisor-fixture-'+[guid]::NewGuid().ToString
 New-Item -ItemType Directory -Path $fixture -Force|Out-Null
 try {
     $runtimeBody=Get-FixtureSource (Get-Content (Join-Path $PSScriptRoot 'ClaudeGuard-Runtime.psm1') -Raw)
+    # Only the isolated runner uses PATH Python; production deployment retains its reviewed interpreter path.
+    $runtimeBody=$runtimeBody.Replace("`$python=Join-Path `$env:LOCALAPPDATA 'Programs\Python\Python311\python.exe'","`$python=(Get-Command python -ErrorAction Stop).Source")
     $runtimeHeader=@'
 $ErrorActionPreference='Stop'
 function Get-GuardState{[pscustomobject]@{Desktop=[pscustomobject]@{Path='fixture-desktop'};CodePaths=@('fixture-code')}}
@@ -153,7 +157,7 @@ function Get-NetTCPConnection{}
 function Get-Process{[pscustomobject]@{StartTime=[datetime]::UtcNow}}
 '@
     $runtimeFooter=@'
-$python=Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\python.exe'
+$python=(Get-Command python -ErrorAction Stop).Source
 $info=[Diagnostics.ProcessStartInfo]::new();$info.FileName=$python;$info.UseShellExecute=$false;$info.CreateNoWindow=$true
 $info.ArgumentList.Add('-c');$info.ArgumentList.Add('import time; time.sleep(20)')
 $sentinel=[Diagnostics.Process]::Start($info)
@@ -173,6 +177,26 @@ try{
     $valid=Get-GuardRuntimeSafety -EvidenceBudgetMilliseconds 3000 -ReaderTimeoutMilliseconds 1000
     if(-not $valid.Safe -or @($valid.Environments).Count -ne 3){throw 'Valid reader evidence did not retain existing safe approval.'}
     $cases+=@{Scenario='runtime-reader-valid-evidence';Passed=$true;Safe=$valid.Safe;EnvironmentCount=@($valid.Environments).Count}
+    $script:FixtureConnections=@();$script:FixtureListeners=@()
+    function Get-NetTCPConnection{param($State) if($State -eq 'Listen'){$script:FixtureListeners}else{$script:FixtureConnections}}
+    foreach($case in @(
+        @{Name='incident-localhost-8771-synsent';Address='127.0.0.1';Port=8771;State='SynSent';Safe=$true;Pending=1;Listener=$false},
+        @{Name='ipv6-loopback-synsent';Address='::1';Port=8771;State='SynSent';Safe=$true;Pending=1;Listener=$false},
+        @{Name='unknown-loopback-established';Address='127.0.0.1';Port=8771;State='Established';Safe=$false;Pending=0;Listener=$false},
+        @{Name='shared-proxy-synsent';Address='127.0.0.1';Port=10808;State='SynSent';Safe=$false;Pending=0;Listener=$false},
+        @{Name='shared-proxy-established';Address='::1';Port=10813;State='Established';Safe=$false;Pending=0;Listener=$false},
+        @{Name='shared-proxy-owned-listener';Address='127.0.0.1';Port=10808;State='Established';Safe=$false;Pending=0;Listener=$true},
+        @{Name='external-synsent';Address='203.0.113.10';Port=443;State='SynSent';Safe=$false;Pending=0;Listener=$false},
+        @{Name='external-established';Address='203.0.113.10';Port=443;State='Established';Safe=$false;Pending=0;Listener=$false},
+        @{Name='dedicated-proxy-established';Address='127.0.0.1';Port=10818;State='Established';Safe=$true;Pending=0;Listener=$false},
+        @{Name='owned-local-service-established';Address='127.0.0.1';Port=8771;State='Established';Safe=$true;Pending=0;Listener=$true}
+    )){
+        $script:FixtureConnections=@([pscustomobject]@{OwningProcess=101;RemoteAddress=$case.Address;RemotePort=$case.Port;State=$case.State})
+        $script:FixtureListeners=if($case.Listener){@([pscustomobject]@{OwningProcess=102;LocalPort=$case.Port})}else{@()}
+        $observed=Get-GuardRuntimeSafety -EvidenceBudgetMilliseconds 3000 -ReaderTimeoutMilliseconds 1000
+        if($observed.Safe -ne $case.Safe -or @($observed.UnconfirmedLoopbackConnections).Count -ne $case.Pending -or (@($observed.UnexpectedConnections).Count -gt 0) -eq $case.Safe){throw ('Network decision fixture failed: '+$case.Name+' '+($observed|ConvertTo-Json -Depth 8 -Compress))}
+        $cases+=@{Scenario=$case.Name;Passed=$true;Safe=$observed.Safe;UnconfirmedLoopbackCount=@($observed.UnconfirmedLoopbackConnections).Count}
+    }
     $cases|ConvertTo-Json
 }finally{if(-not $sentinel.HasExited){$sentinel.Kill();$null=$sentinel.WaitForExit(1000)};$sentinel.Dispose()}
 '@
@@ -189,7 +213,7 @@ sys.argv = ['reader.py', '1', '--timeout-seconds', '0.2']
 runpy.run_path(str(pathlib.Path(__file__).with_name('reader.py')), run_name='__main__')
 '@
     [IO.File]::WriteAllText((Join-Path $fixture 'watchdog.py'),$watchdog)
-    $python=Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\python.exe'
+    $python=(Get-Command python -ErrorAction Stop).Source
     $timer=[Diagnostics.Stopwatch]::StartNew();$out=& $python (Join-Path $fixture 'watchdog.py') 2>&1
     if($LASTEXITCODE -ne 124 -or $out -or $timer.ElapsedMilliseconds -ge 2000){throw 'Python reader watchdog fixture failed.'}
     $results+=@{Scenario='python-reader-watchdog';Passed=$true;ExitCode=$LASTEXITCODE;ElapsedMilliseconds=$timer.ElapsedMilliseconds;EmittedEvidence=$false}

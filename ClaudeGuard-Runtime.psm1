@@ -35,10 +35,18 @@ function Get-GuardRuntimeSafety([ValidateRange(1,30000)][int]$EvidenceBudgetMill
     $connections=@(Get-NetTCPConnection -ErrorAction SilentlyContinue|Where-Object {$_.OwningProcess -in $pids -and $_.State -in 'Established','SynSent'}|Select-Object OwningProcess,RemoteAddress,RemotePort,@{n='State';e={$_.State.ToString()}})
     $localServices=@(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue|Where-Object OwningProcess -in $descendants)
     $localPorts=@($localServices|ForEach-Object LocalPort)
+    # 未建立的本机连接不代表已通过其它服务联网；监听器启动/退出也可能跨越两次快照。
+    # 共享代理始终拒绝，已建立的未知本机连接和外部直连仍触发保护。
+    $unconfirmedLoopback=@($connections|Where-Object {
+        ($_.RemoteAddress -eq '::1' -or $_.RemoteAddress -like '127.*') -and
+        $_.State -eq 'SynSent' -and $_.RemotePort -notin @(10808,10813,10818) -and $_.RemotePort -notin $localPorts
+    })
     $unexpected=@($connections|Where-Object {
         if($_.RemoteAddress -ne '::1' -and $_.RemoteAddress -notlike '127.*'){$true}
+        elseif($_.RemotePort -in @(10808,10813)){$true}
         elseif($_.RemoteAddress -eq '127.0.0.1' -and $_.RemotePort -eq 10818){$false}
-        else{$_.RemotePort -notin $localPorts}
+        elseif($_.RemotePort -in $localPorts){$false}
+        else{$_.State -ne 'SynSent'}
     })
     if($unexpected.Count){$issues.Add('UnexpectedRuntimeNetworkPath')}
     $python=Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\python.exe'
@@ -65,7 +73,7 @@ function Get-GuardRuntimeSafety([ValidateRange(1,30000)][int]$EvidenceBudgetMill
         if(-not $e.ConfigDirMatches -or -not $e.HttpProxyMatches -or -not $e.HttpsProxyMatches -or -not $e.AllProxyMatches -or -not $e.NoProxyOnlyLoopback -or -not $e.TlsVerificationEnabled -or @($e.UnexpectedTlsOverrideNames).Count -or @($e.UnexpectedProviderOverrideNames).Count){$issues.Add('RuntimeEnvironmentMismatch')}
     }
     $identities=@($pids|ForEach-Object {$running=Get-Process -Id $_ -ErrorAction SilentlyContinue;if($running){@{Pid=$_;Started=$running.StartTime.ToUniversalTime().ToString('o')}}})
-    [pscustomobject]@{Time=[datetime]::UtcNow.ToString('o');Safe=($issues.Count -eq 0);Issues=@($issues);DesktopProcessCount=$desktop.Count;CodeProcessCount=$code.Count;UnexpectedConnections=$unexpected;Environments=$environments;OwnedPids=@($pids);OwnedProcesses=$identities;EvidenceDeadlineExceeded=$deadlineExceeded;ReaderTimeoutPids=$readerTimeoutPids;EvidenceReaderElapsedMilliseconds=$readerClock.ElapsedMilliseconds}
+    [pscustomobject]@{Time=[datetime]::UtcNow.ToString('o');Safe=($issues.Count -eq 0);Issues=@($issues);DesktopProcessCount=$desktop.Count;CodeProcessCount=$code.Count;UnexpectedConnections=$unexpected;UnconfirmedLoopbackConnections=$unconfirmedLoopback;Environments=$environments;OwnedPids=@($pids);OwnedProcesses=$identities;EvidenceDeadlineExceeded=$deadlineExceeded;ReaderTimeoutPids=$readerTimeoutPids;EvidenceReaderElapsedMilliseconds=$readerClock.ElapsedMilliseconds}
 }
 function Stop-GuardUnsafeRuntime($Snapshot) {
     $d=Get-GuardState

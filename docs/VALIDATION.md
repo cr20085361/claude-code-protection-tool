@@ -1,5 +1,47 @@
 # 验证记录与边界
 
+## 双节点兼容及入口误报修复 (2026-10-26)
+
+现场旧专用节点 TCP 超时；另一条节点经 v2rayN/Xray 可用，但原 sing-box 对该 Reality 节点握手失败。专用代理改为本机已有 Xray 核心和两条核准节点的独立配置，监听仍为本机 10818。单独测试和生产守护均通过两个出口检测站验证；IPv6 字面量请求在代理内被拒绝。核准列表之外的出口仍拒绝，节点池无直连回退。
+
+隔离回归通过：节点池与退避 13 项、PowerShell/C# 健康契约各 26 项、维护 PowerShell 46 项 + C# 10 项、生命周期 28 项，以及守护决策/运行检查。正式部署于台北时间 23:14 恢复 Healthy。第一条节点本次仍不可达，当前连接选择第二条；这不代表两条都已恢复。
+
+首次部署后的入口仍误报旧固定出口：实际 EXE 没有节点池字段，先前仅测试源代码生成的库，未核验该 EXE。改用绝对源路径重新编译，并增加 `Test-ClaudeSupervisorHealth.ps1 -LauncherAssembly`，对实际安装文件运行全部 26 项 C# 契约。另验证以小写项目路径启动时仍能读取已完成的更新记录。
+
+23:22 原生窗口确认：Claude 已打开，健康提示为绿色“已核准节点池（2 条）出口检查通过”，旧出口红字及更新记录误报消失。入口调用身份与成功结果一致。证据保存在本机 `evidence/node-pool-deployment.json`、`evidence/supervisor-health-regression.json`、`evidence/launcher-node-pool-ui-fix.json`；测试代理进程已清理。
+
+未执行：双节点同时失效的额外原生故障注入被自动审批拒绝；长期运行、睡眠/重登录、新节点导入及真实 Code 回答未在本次验收。节点池当前覆盖用户指定的两条 VLESS Reality 节点，未来节点须单独导入并核准出口。
+
+## Desktop 3.x Code 缓存路径适配 (2026-10-21)
+
+现场原因为实际引擎迁到 `%LOCALAPPDATA%\Claude-Data\claude_pzs8sxrjxfjjc\claude-code`，原部署只核准两个旧缓存路径。实际 2.1.304 引擎存在且 Anthropic 签名有效，但继承了当前用户的执行拒绝，桌面会话反复 `spawn EPERM`。
+
+新增统一路径发现，准备、迁移、缓存修复和发现诊断覆盖新旧三处缓存；已有且哈希正确的载荷也重新设置受保护的执行许可，先核验防火墙及共享代理阻断。路径变更纳入权限快照和失败回滚，启动检查同时验证路径完整性、当前用户执行权和三处门禁测试证据。
+
+隔离检查通过：新路径/真实离线执行权限 7 项、维护 PowerShell 46 项 + C# 10 项、缓存 worker 5 项、生命周期 28 项、更新链 94 项，共 190 项。离线执行测试复现继承执行拒绝，修复后相同文件可启动；未核准邻接程序仍被拒绝，修改哈希会停止修复。
+
+本机 23:07 的首次应用受到另一个安装器自动重开客户端干扰，按进程检查停止并成功回滚，实际新路径恢复为拒绝执行。重试于 **23:11:39（台北时间）完成**，核准 Desktop 3.1623.0.0 / Code 2.1.304，三处路径均安装防火墙并核验门禁；守护恢复 Healthy，两项固定出口探测通过，维护标记与 SafetyHold 清理。
+
+实际新路径执行 `--version` 返回 `2.1.304 (Claude Code)`。通过受保护入口重开桌面后，23:17:24 打开原失败会话，日志记录 **`warmed successfully in 123ms`**；引擎 PID 37812 的父进程为 Desktop PID 37288，路径为新 `Claude-Data` 缓存。重开后未再发现 `spawn EPERM`。没有向原项目发送新任务或改写其草稿。独立 headless 模型响应检查返回未登录，不作为桌面启动验收；本次证明桌面引擎初始化成功，不宣称验证完整模型回复及所有 MCP 功能。
+
+运行快照另确认 2 个新路径 Code 进程、隔离环境核验通过、Code 专用代理连接通过，异常连接数为 0。用户随后按 Esc 停止桌面操作；未继续控制界面。临时夹具目录清理被自动审批拦截，保留现场文件。
+
+本机证据：`evidence/code-path-fixture-tests.json`、`evidence/maintenance-fixture-tests.json`、`evidence/version-migration.json`、`evidence/code-execution-gate-test.json`，以及本次汇总 `evidence/code-path-adaptation-live.json`。任务补丁与修改前备份分别保存在本机 `evidence/code-path-adaptation.patch` 和受限 `private/path-adaptation-before-*`，未上传凭据或原始运行环境。
+
+## 本机连接误触发退出排查 (2026-10-21)
+
+13:09:43（台北时间）的官方新版查询记录与 13:47:55 的停止事件分属两条路径。后者记录 `SafetyStop`，原因是 `Runtime safety mismatch: UnexpectedRuntimeNetworkPath`；现场运行快照中只有两条 `127.0.0.1:8771 / SynSent` 被列为异常。旧守护会立即调用 `Stop-GuardUnsafeRuntime`，随后停止专用代理并进入安全暂停。现存证据没有确认该端口当时的服务用途，不能据此认定是官方更新器退出或客户端崩溃。
+
+修复将未建立且不属于已知共享代理的未知本机连接单独记录，避免仅凭该快照结束会话；连接若在后续检查中建立但仍无法对应受保护子进程监听服务，继续按异常处理。未新增 8771 端口白名单。
+
+隔离守护回归 **34 项 PASS**，包含原始本机 SynSent、IPv6、本机未知已建立连接、两种共享代理、共享代理伪装成自有监听、外部直连、专用代理、自有本机服务和“已发现新版本但停止调用为零”。版本观察回归 **33 项 PASS**。证据为本机 `evidence/supervisor-decision-regression.json` 与 `evidence/version-info-regression.json`。这些用例不操作生产 Claude；真实账户会话、端口原始服务和长期运行观察不属于此次隔离验收。
+
+补丁已通过带备份、哈希核对和失败回滚的受控维护应用到本机。首次 UAC 取消后，用户明确要求再次授权；14:49:51 管理员应用成功，生产 runtime 和部署哈希匹配，新的守护为 **Healthy / Ready=true**，两项固定出口探测通过。原专用代理进程及防护配置保持一致，维护标记已清理。未执行 Claude 升级。
+
+真实连续性验证通过：受保护入口启动 Desktop 后，14:50:38–14:50:42 强制查询官方新版，返回 **Checked / Available**（已安装 2.42304.2.0，查询到 3.1623.0）；主进程 PID 75364 及启动时间保持一致，守护 RunId 和代理进程身份不变，期间 **SafetyStop=0**。至 14:51:14，查询后的下一轮运行安全及出口检查均已完成，守护仍 **Healthy / Ready=true**；10 个 Desktop 进程的运行快照 Safe=true，客户端主进程身份保持一致，回读确认 AutoUpdaterDisabled=true，维护标记和安全暂停均不存在。这是实际客户端进程及查询验证，没有提交账户消息或真实 Code 工作任务；不代表长期运行、睡眠唤醒或所有未来退出原因均已验收。
+
+排查、部署与现场查询证据分别为本机 `evidence/claude-exit-investigation-20261021.json`、`evidence/runtime-exit-fix-deployment-20261021.json` 和 `evidence/version-check-live-continuity-20261021.json`。历史补丁保留为 `evidence/claude-exit-fix.patch`，应用前 `git apply --check` 通过。备份和回滚文件保留在受限 `private` 目录。
+
 ## v1.3.3 版本显示与同步存档 (2026-10-20)
 
 主窗口标题、右上角及维护窗口标题显示编译版本 v1.3.3；文件版本为 1.3.3.0。13 项原生版本窗口检查通过，并已渲染检查标题与标签无重叠；本机入口已替换并以维护查看模式打开，未重建或暂停守护。

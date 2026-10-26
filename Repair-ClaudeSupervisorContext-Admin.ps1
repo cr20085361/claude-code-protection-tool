@@ -57,7 +57,7 @@ if($SupervisorOnly){
         if($saved.Count -ne 1 -or $saved[0].Hash -ne $entry.Hash){throw 'Supervisor rollback source does not match the approved deployment; deployment refused.'}
     }
     Write-GuardJson (Join-Path $transaction 'rollback-files.json') $rollbackFiles
-    $protectedPaths=@((Get-GuardPath 'private\proxy.json'),(Get-GuardPath 'runtime\sing-box.exe'),(Get-GuardPath 'private\firewall.json'),(Join-Path $d.ConfigDir 'settings.json'),$d.OriginalCli.Path)+@($d.CodePaths)
+    $protectedPaths=@((Get-GuardPath 'private\proxy.json'),(Get-GuardCorePath $d),(Get-GuardPath 'private\firewall.json'),(Join-Path $d.ConfigDir 'settings.json'),$d.OriginalCli.Path)+@($d.CodePaths)
     $protected=@($protectedPaths|ForEach-Object {[pscustomobject]@{Path=$_;Hash=(Get-GuardHash $_)}})
     $holdPath=Get-GuardPath 'private\safety-hold.json'
     $holdHash=if(Test-Path -LiteralPath $holdPath){Get-GuardHash $holdPath}else{$null}

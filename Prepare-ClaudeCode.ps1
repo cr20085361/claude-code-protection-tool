@@ -28,7 +28,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not read the installed official Code man
 $m=$manifestText|ConvertFrom-Json
 if (-not $m.msixAutomaticCodeUpdatesDisabled -or $m.desktopCodeVersion -notmatch '^\d+\.\d+\.\d+$' -or ([uri]$m.baseUrl).Host -ne 'downloads.claude.ai') { throw 'Unexpected engine/update source; review required.' }
 Write-GuardJson (Get-GuardPath 'evidence\desktop-code-manifest.json') $m
-$roots=@((Join-Path $env:APPDATA 'Claude\claude-code'),(Join-Path $env:LOCALAPPDATA ('Packages\'+$d.Desktop.Family+'\LocalCache\Roaming\Claude\claude-code')))
+$roots=@(Get-GuardCodeCacheRoots $desktop)
 $gateBackupPath=Get-GuardPath 'private\code-gate-backup.json'
 if (-not (Test-Path $gateBackupPath)) {
     $backup=@()

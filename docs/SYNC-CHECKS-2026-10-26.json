@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "source_version": "v1.3.3",
+  "sync_date": "2026-10-26",
+  "scope": "Sanitized public source snapshot; isolated regression and compilation",
+  "power_shell_parser_files": 58,
+  "csharp_launcher_compile": "PASS",
+  "csharp_supervisor_host_compile": "PASS",
+  "tests": [
+    {
+      "status": "PASS",
+      "script": "Test-ClaudeNodePool.ps1",
+      "cases": 13
+    },
+    {
+      "paired_power_shell_csharp_cases": 26,
+      "status": "PASS",
+      "actual_compiled_exe_tested": true,
+      "script": "Test-ClaudeSupervisorHealth.ps1"
+    },
+    {
+      "status": "PASS",
+      "script": "Test-ClaudeCodePaths.ps1",
+      "cases": 7
+    },
+    {
+      "status": "PASS",
+      "power_shell_cases": 46,
+      "script": "Test-ClaudeMaintenance.ps1",
+      "csharp_cases": 10
+    },
+    {
+      "status": "PASS",
+      "script": "Test-ClaudeLifecycle.ps1",
+      "cases": 28
+    },
+    {
+      "status": "PASS",
+      "script": "Test-ClaudeSupervisorDecisions.ps1",
+      "cases": 34
+    },
+    {
+      "status": "PASS",
+      "script": "Test-ClaudeDesktopUpdate.ps1",
+      "cases": 94
+    }
+  ],
+  "production_modified": false,
+  "private_deployment_and_credentials_included": false,
+  "binary_distribution_included": false,
+  "native_both_nodes_unavailable": "NOT_RUN",
+  "new_release_created": false
+}

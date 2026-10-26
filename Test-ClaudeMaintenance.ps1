@@ -23,7 +23,7 @@ function Require([bool]$Ok,[string]$Name){if(-not $Ok){throw ('Maintenance fixtu
 function Import-Module {param($Name,[switch]$Force)}
 function Test-GuardAdmin {$true}
 function Get-GuardState {Read-GuardJson (Get-GuardPath 'private\deployment.json')}
-function Get-GuardDesktop {[pscustomobject]@{Version='fixture-desktop';Path=(Get-GuardPath 'desktop.exe');Hash=(Get-GuardHash (Get-GuardPath 'desktop.exe'));Family='fixture-family'}}
+function Get-GuardDesktop {[pscustomobject]@{Version='fixture-desktop';Path=(Get-GuardPath 'desktop.exe');Hash=(Get-GuardHash (Get-GuardPath 'desktop.exe'));Family='Claude_fixture'}}
 function Get-GuardSupervisorSnapshot {[pscustomobject]@{Ready=$true;Kind='Healthy';Health=[pscustomobject]@{Time=[datetime]::UtcNow.ToString('o');RunId='fixture-run'}}}
 function Test-GuardLocalCodeAcceptance {$false}
 $global:MaintenanceFixtureCalls=[Collections.Generic.List[string]]::new()
@@ -61,9 +61,10 @@ function Reset-State {
     foreach($file in @('desktop.exe','archive.bin','payload.exe')){[IO.File]::WriteAllText((Get-GuardPath $file),'fixture-only')}
     Write-GuardJson (Get-GuardPath 'private\proxy.json') @{fixture='fixed'}
     Write-GuardJson (Get-GuardPath 'private\firewall.json') @{Rules=@()}
-    $roots=@((Join-Path $env:APPDATA 'Claude\claude-code'),(Join-Path $env:LOCALAPPDATA 'Packages\fixture-family\LocalCache\Roaming\Claude\claude-code'))
+    $roots=@(Get-GuardCodeCacheRoots (Get-GuardDesktop))
     $paths=@($roots|ForEach-Object {Join-Path $_ 'fixture-code\0123456789ab\claude.exe'})
     foreach($path in $paths){$null=New-Item -ItemType Directory -Path (Split-Path $path) -Force;[IO.File]::WriteAllText($path,'fixture-only')}
+    Write-GuardJson (Get-GuardPath 'private\code-gate-backup.json') @{Roots=@($roots|ForEach-Object {@{Path=$_;Existed=$true;Sddl=(Get-Acl -LiteralPath $_).Sddl}})}
     $d=@{UserSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;ProxyUrl='http://127.0.0.1:1';ExpectedIp='203.0.113.1';ConfigDir=$Fixture;CoreHash='fixture-core';ProxyConfigHash=(Get-GuardHash (Get-GuardPath 'private\proxy.json'));Desktop=(Get-GuardDesktop);CodePaths=$paths;CodeGate=@{Roots=$roots;Version='fixture-code';CompressedHash='0123456789abcdef';ArchivePath=(Get-GuardPath 'archive.bin');ArchiveHash=(Get-GuardHash (Get-GuardPath 'archive.bin'));PayloadHash=(Get-GuardHash (Get-GuardPath 'payload.exe')).ToLowerInvariant()};Reliability=@{TaskName='fixture-task';Installed='fixture'};UpdatePolicyBackup=@{Value=$null;Kind=$null}}
     Write-GuardJson (Get-GuardPath 'private\deployment.json') $d
     $d
@@ -155,6 +156,17 @@ Remove-Item -LiteralPath $missingRoot -Recurse -Force
 $null=& (Get-GuardPath 'Update-ClaudeGuard.ps1') -Install -StageFile $f.Stage -StageHash $f.StageHash -ResultFile $f.Result -OperationId $f.Id
 Require ((Read-GuardJson $f.Result).Success -and (Test-Path -LiteralPath (Get-GuardState).CodePaths[1])) 'maintenance-restores-missing-package-code-cache'
 Require ($global:MaintenanceFixtureCalls.IndexOf('suspend') -lt $global:MaintenanceFixtureCalls.IndexOf('set-cache-gate') -and 'set-cache-gate' -in $global:MaintenanceFixtureCalls) 'missing-cache-gated-after-supervisor-suspension'
+$f=Prepare-FixtureInstall
+$newRoot=(Get-GuardState).CodeGate.Roots[2]
+$stage=Read-GuardJson $f.Stage
+$old=Get-GuardState;$old.CodePaths=@($old.CodePaths|Select-Object -First 2);$old.CodeGate.Roots=@($old.CodeGate.Roots|Select-Object -First 2)
+Write-GuardJson (Get-GuardPath 'private\deployment.json') $old
+$gateBackup=Read-GuardJson (Get-GuardPath 'private\code-gate-backup.json');$gateBackup.Roots=@($gateBackup.Roots|Select-Object -First 2);Write-GuardJson (Get-GuardPath 'private\code-gate-backup.json') $gateBackup
+$stage.PreviousStateHash=Get-GuardHash (Get-GuardPath 'private\deployment.json');Write-GuardJson $f.Stage $stage;$f.StageHash=Get-GuardHash $f.Stage
+$null=Set-GuardMaintenanceOperation $f.Id @{StageHash=$f.StageHash}
+$null=& (Get-GuardPath 'Update-ClaudeGuard.ps1') -Install -StageFile $f.Stage -StageHash $f.StageHash -ResultFile $f.Result -OperationId $f.Id
+Require ((Read-GuardJson $f.Result).Success -and $newRoot -in @((Get-GuardState).CodeGate.Roots)) 'legacy-deployment-migrates-to-claude-data-root'
+Require ($newRoot -in @((Read-GuardJson (Get-GuardPath 'private\code-gate-backup.json')).Roots.Path)) 'new-root-rollback-acl-snapshot-preserved'
 $f=Prepare-FixtureInstall;$global:MaintenanceFixtureFailure='cache-gate'
 $null=& (Get-GuardPath 'Update-ClaudeGuard.ps1') -Install -StageFile $f.Stage -StageHash $f.StageHash -ResultFile $f.Result -OperationId $f.Id
 Require (-not (Read-GuardJson $f.Result).Success -and $global:MaintenanceFixtureCalls.Count -eq 0) 'changed-existing-cache-gate-refused-before-mutation'

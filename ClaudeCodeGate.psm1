@@ -99,6 +99,7 @@ function Test-CodeCacheGate {
 function Assert-CodePrepared {
     $d=Get-GuardState
     if ($d.CodeCoverage -notin @('prepared','verified') -or $d.CodeGate.Schema -ne 1) { throw 'Local Code protection is not prepared.' }
+    if(@(Compare-Object @(Get-GuardCodeCacheRoots $d.Desktop|Sort-Object) @($d.CodeGate.Roots|Sort-Object)).Count){throw 'Code cache path coverage requires reviewed migration.'}
     if ((Get-GuardHash $d.CodeGate.ArchivePath) -ne $d.CodeGate.ArchiveHash) { throw 'Desktop engine metadata changed; protection review required.' }
     foreach($root in $d.CodeGate.Roots) {
         Assert-CodeCacheGate $root
@@ -115,9 +116,12 @@ function Assert-CodePrepared {
         if((Get-GuardHash $path) -ne $d.CodeGate.PayloadHash){throw 'Approved Code binary changed.'}
         $acl=Get-Acl -LiteralPath $path
         if(-not $acl.AreAccessRulesProtected){throw 'Approved Code binary execution permission changed.'}
+        $userRules=@($acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])|Where-Object {$_.IdentityReference.Value -eq $d.UserSid -and ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::ExecuteFile)})
+        if(@($userRules|Where-Object {$_.AccessControlType.ToString() -eq 'Deny'}).Count -or -not @($userRules|Where-Object {$_.AccessControlType.ToString() -eq 'Allow'}).Count){throw 'Approved Code binary is not executable by the desktop user.'}
     }
     $proof=Read-GuardJson (Get-GuardPath 'evidence\code-execution-gate-test.json')
     if (-not $proof.Passed) { throw 'Code execution gate has not passed credential-free tests.' }
+    if(@(Compare-Object @($proof.Results.Root|Sort-Object) @($d.CodeGate.Roots|Sort-Object)).Count){throw 'Code execution gate proof does not cover the approved cache roots.'}
 }
 function Restore-CodeCachePermissions([string]$Root,[string[]]$ApprovedPaths,[string]$OriginalSddl) {
     # Restore only this component's known root/files; retain Code cache and user data.

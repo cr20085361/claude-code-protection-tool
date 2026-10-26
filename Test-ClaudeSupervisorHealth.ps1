@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([string]$LauncherAssembly)
 $ErrorActionPreference='Stop'
 Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard.psm1') -Force
 $fixture=Join-Path $PSScriptRoot ('private\health-fixture-'+[guid]::NewGuid().ToString('N'))
@@ -36,6 +36,11 @@ Add-Case 'reported-safety-hold' $false {param($h)$h.Status='SafetyHold'} $true '
 Add-Case 'backoff-is-not-ready' $false {param($h)$h.Status='Backoff'}
 Add-Case 'old-hold-after-reviewed-maintenance' $false {param($h)$h.Status='SafetyHold'} $false 'Running' $false 'SupervisorUnavailable'
 Add-Case 'persisted-hold-with-legacy-health' $false {param($h)$h.SchemaVersion=1} $false 'Ready' $true 'SafetyHold'
+Add-Case 'node-pool-second-node' $true {param($h)$h.LastVerifiedEgress.CloudflareIp='203.0.113.2';$h.LastVerifiedEgress.IpifyIp='203.0.113.2'}
+Add-Case 'node-pool-switch-between-probes' $true {param($h)$h.LastVerifiedEgress.IpifyIp='203.0.113.2'}
+Add-Case 'node-pool-unapproved-egress' $false {param($h)$h.LastVerifiedEgress.IpifyIp='203.0.113.99'}
+foreach($case in @($cases|Where-Object Name -like 'node-pool-*')){$case.State=$state|ConvertTo-Json -Depth 10|ConvertFrom-Json;$case.State|Add-Member ExpectedIps @('203.0.113.1','203.0.113.2')}
+Add-Case 'upstream-failure-not-ready' $false {param($h)$h.Status='UpstreamUnavailable';$h|Add-Member ConsecutiveFailures 75;$h|Add-Member NextProbe ($now.AddMinutes(4).ToString('o'))}
 $results=@()
 try {
     $module=Get-Module ClaudeGuard
@@ -64,14 +69,21 @@ public class ContractRunner {public static int Main(string[] args){var cases=new
     $sourcePath=Join-Path $fixture 'ContractRunner.cs';[IO.File]::WriteAllText($sourcePath,$source)
     $compiler=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
     $uiDll=Join-Path $fixture 'GuardUI.dll'
-    & $compiler /nologo /target:library /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Web.Extensions.dll ('/out:'+$uiDll) (Join-Path $PSScriptRoot 'ClaudeGuardLauncher.cs')
-    if($LASTEXITCODE -ne 0){throw 'UI contract assembly compile failed.'}
+    if($LauncherAssembly){
+        $LauncherAssembly=[IO.Path]::GetFullPath($LauncherAssembly)
+        $assemblyName=[Reflection.AssemblyName]::GetAssemblyName($LauncherAssembly).Name
+        $uiDll=Join-Path $fixture ($assemblyName+'.exe')
+        Copy-Item -LiteralPath $LauncherAssembly -Destination $uiDll
+    }else{
+        & $compiler /nologo /target:library /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Web.Extensions.dll ('/out:'+$uiDll) (Join-Path $PSScriptRoot 'ClaudeGuardLauncher.cs')
+        if($LASTEXITCODE -ne 0){throw 'UI contract assembly compile failed.'}
+    }
     $runner=Join-Path $fixture 'ContractRunner.exe'
     & $compiler /nologo /reference:System.Windows.Forms.dll /reference:System.Web.Extensions.dll ('/reference:'+$uiDll) ('/out:'+$runner) $sourcePath
     if($LASTEXITCODE -ne 0){throw 'Contract runner compile failed.'}
     & $runner (Join-Path $fixture 'cases.json')
     if($LASTEXITCODE -ne 0){throw 'C# health contract regression failed.'}
-    Write-GuardJson (Join-Path $PSScriptRoot 'evidence\supervisor-health-regression.json') @{Time=(Get-Date -Format o);Passed=$true;FixtureOnly=$true;Cases=$results;CSharpCases=$cases.Count}
+    Write-GuardJson (Join-Path $PSScriptRoot 'evidence\supervisor-health-regression.json') @{Time=(Get-Date -Format o);Passed=$true;FixtureOnly=$true;Cases=$results;CSharpCases=$cases.Count;TestedAssembly=$LauncherAssembly;TestedAssemblyHash=if($LauncherAssembly){Get-GuardHash $LauncherAssembly}else{$null}}
 }finally{
     # 删除经过绝对路径范围核验的本脚本隔离目录。
     $full=[IO.Path]::GetFullPath($fixture);$allowed=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'private'))+[IO.Path]::DirectorySeparatorChar

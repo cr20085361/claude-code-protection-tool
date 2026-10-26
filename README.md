@@ -4,11 +4,14 @@
 
 当前源码基线：**v1.3.3 · 第 9 次源码迭代**。采用 [MIT 许可证](LICENSE)。本工具与 Anthropic 无隶属关系，不保证账号不受限制，也不改变服务的支持地区或使用政策。
 
+本次源码同步包含 **2026-10-26 修复**：Desktop 3.x Code 缓存路径、未建立本机连接的守护误判、Xray 双节点兼容、入口出口状态误报和更新记录路径大小写问题。编译版本号仍为 v1.3.3，未另建 Release；具体证据及边界见 [验证记录](docs/VALIDATION.md)。
+
 ## 能力
 
 - 启动前核对当前安装版本、签名、程序哈希、代理策略、防火墙及当次守护就绪状态。
 - 为 Desktop 和其指定版本的本地 Code 使用独立配置与专用代理；检测异常时暂停受保护启动，保留可核查的原因。
 - 独立后台宿主托管守护，提供有限恢复、异常退避、固定出口检查及日志脱敏。关闭入口不等于退出 Desktop/Code。
+- 支持经核准的 Xray VLESS Reality 节点池，按连接检测选择可用节点，并核对出口白名单；保留旧 sing-box 单节点配置兼容性。节点须单独导入并核验，不会自动信任共享代理中的所有节点。
 - 显示已安装 Desktop、该包配套 Code、已核准 Code，以及实际观察到的本地 Code 运行版本。
 - 查询官方 Windows x64 MSIX 当前发布，下载并核验官方包及配套 Code；更高版本才允许安装，安装后接续防护迁移和守护核验。
 - 保存维护操作身份和最终结果，支持入口关闭重开接续，区分等待、明确授权取消、中断、失败和完成。
@@ -40,6 +43,7 @@ pwsh -NoProfile -File .\Test-ClaudeMaintenance.ps1
 pwsh -NoProfile -File .\Test-ClaudeSupervisorHealth.ps1
 pwsh -NoProfile -File .\Test-ClaudeLifecycle.ps1
 pwsh -NoProfile -File .\Test-ClaudeVersionInfo.ps1
+pwsh -NoProfile -File .\Test-ClaudeNodePool.ps1
 ```
 
 上述检查运行临时夹具和编译测试程序，不执行真实 MSIX 安装或生产防火墙迁移。原生窗口夹具和真实桌面、网络、管理员测试另见 [验证记录与边界](docs/VALIDATION.md)。其他 `Test-*Native*`、恢复和故障注入脚本可能操作已部署的专用组件，不应批量运行全部测试脚本。
