@@ -2,9 +2,9 @@
 
 面向 **Windows x64、Claude Desktop 及其本地 Code 会话**的桌面安全入口。项目提供专用代理、防火墙与执行门禁核验、后台守护、版本显示，以及官方 Desktop 和配套 Code 的受控更新。
 
-当前源码基线：**v1.3.3 · 第 9 次源码迭代**。采用 [MIT 许可证](LICENSE)。本工具与 Anthropic 无隶属关系，不保证账号不受限制，也不改变服务的支持地区或使用政策。
+当前源码基线：**v1.4.5 · 第 17 次源码迭代**。采用 [MIT 许可证](LICENSE)。本工具与 Anthropic 无隶属关系，不保证账号不受限制，也不改变服务的支持地区或使用政策。
 
-本次源码同步包含 **2026-10-26 修复**：Desktop 3.x Code 缓存路径、未建立本机连接的守护误判、Xray 双节点兼容、入口出口状态误报和更新记录路径大小写问题。编译版本号仍为 v1.3.3，未另建 Release；具体证据及边界见 [验证记录](docs/VALIDATION.md)。
+本次源码同步包含 **2026-10-31 预览刷新修复**：以 Windows 原生 IPv4/IPv6 监听专表区分真实监听与临时绑定端口，修复航图持续刷新时的误停；对网关工作进程逐项核验身份和安全环境，并记录拒绝原因。外部直连、共享代理、真实非回环监听和未经核验的本机服务仍拒绝；仅对跨快照的本地连接异常进行一次有界复查。当前入口编译版本为 v1.4.5（1.4.5.0）；具体证据及边界见 [验证记录](docs/VALIDATION.md)。
 
 ## 能力
 
@@ -44,9 +44,14 @@ pwsh -NoProfile -File .\Test-ClaudeSupervisorHealth.ps1
 pwsh -NoProfile -File .\Test-ClaudeLifecycle.ps1
 pwsh -NoProfile -File .\Test-ClaudeVersionInfo.ps1
 pwsh -NoProfile -File .\Test-ClaudeNodePool.ps1
+pwsh -NoProfile -File .\Test-ClaudeProxyTracking.ps1
+pwsh -NoProfile -File .\Test-ClaudeIterationVersionFixtures.ps1
+pwsh -NoProfile -File .\Test-ClaudeIterationVersion.ps1
 ```
 
 上述检查运行临时夹具和编译测试程序，不执行真实 MSIX 安装或生产防火墙迁移。原生窗口夹具和真实桌面、网络、管理员测试另见 [验证记录与边界](docs/VALIDATION.md)。其他 `Test-*Native*`、恢复和故障注入脚本可能操作已部署的专用组件，不应批量运行全部测试脚本。
+
+迭代收尾规则见 [AGENTS.md](AGENTS.md)。构建前会检查版本台账、源码指纹、当前文档和界面常量；部署后还需以 `Test-ClaudeIterationVersion.ps1 -LauncherAssembly <实际 EXE>` 核对交付产物。历史补登记明确区分追溯版本和当时实际 EXE 版本。
 
 ## 主要模块
 
@@ -69,3 +74,5 @@ pwsh -NoProfile -File .\Test-ClaudeNodePool.ps1
 提交问题时请说明 Windows、Desktop/Code 和工具版本、操作步骤及脱敏后的状态提示。不要上传 `private`、浏览器用户目录、OAuth 链接、验证码、原始进程环境、节点订阅或含账号信息的日志。
 
 修改核心安全门禁、生命周期、更新或回滚逻辑时，请提供对应隔离回归；真实桌面和跨机器结果分别报告，未运行的项目保留 `NOT_RUN`。
+
+公开存档与本机部署源码各有精确指纹，登记在同一次迭代的 `public_source_fingerprint` 和 `source_fingerprint`。版本检查会报告匹配的副本；两种副本的未登记改动或混用均不通过。`.gitattributes` 保留原始字节。公开副本不含本机原始证据，`-VerifyLocalEvidence` 仅供持有这些本机材料的部署使用。

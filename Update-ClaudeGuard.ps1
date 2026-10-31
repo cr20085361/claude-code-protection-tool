@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param([switch]$Install,[string]$StageFile,[string]$StageHash,[string]$ResultFile,[string]$OperationId,[string]$RecoverOperationId,[switch]$ContinueDesktopUpdate)
 $ErrorActionPreference='Stop'
 Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard.psm1') -Force

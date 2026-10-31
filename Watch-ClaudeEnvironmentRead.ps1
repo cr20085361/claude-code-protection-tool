@@ -3,7 +3,7 @@ param([ValidateRange(10,900)][int]$Seconds=120)
 $ErrorActionPreference='Stop'
 Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard.psm1') -Force
 $state=Get-GuardState
-$python=Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\python.exe'
+$python=(Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\python.exe')
 $deadline=[datetime]::UtcNow.AddSeconds($Seconds)
 $seen=@{};$records=@()
 $resultPath=Get-GuardPath 'evidence\runtime-environment-native-diagnostic.json'

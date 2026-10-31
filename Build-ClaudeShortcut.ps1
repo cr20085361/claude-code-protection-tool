@@ -1,6 +1,8 @@
 ﻿[CmdletBinding()]
 param([switch]$CompileOnly)
 $ErrorActionPreference='Stop'
+$versionCheck=& (Join-Path $PSScriptRoot 'Test-ClaudeIterationVersion.ps1')
+if(-not $versionCheck.Passed){throw 'Iteration version consistency check failed.'}
 Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard.psm1') -Force
 $d=Get-GuardState
 $pwsh=Get-GuardApprovedShellPath

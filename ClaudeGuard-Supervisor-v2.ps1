@@ -128,7 +128,7 @@ try {
             if(-not @(Get-GuardListener).Count){
                 if($now -lt $nextRestart){$status='Backoff';$reason='等待有限重试';throw [OperationCanceledException]::new('backoff')}
                 for($i=$restartTimes.Count-1;$i -ge 0;$i--){if($restartTimes[$i] -lt $now.AddMinutes(-5)){$restartTimes.RemoveAt($i)}}
-                if($restartTimes.Count -ge 3){$nextRestart=$now.AddMinutes(5);Save-SupervisorRecovery;$status='Backoff';$reason='专用代理反复退出，五分钟后重试';throw [OperationCanceledException]::new('backoff')}
+                if($restartTimes.Count -ge 3){$nextRestart=$now.AddMinutes(5);Save-SupervisorRecovery;$status='Backoff';$reason='专用代理启动重试过于频繁，五分钟后重试';throw [OperationCanceledException]::new('backoff')}
                 # 先保存尝试次数，失败的启动与 worker 重启也占用同一个恢复预算。
                 $restartTimes.Add($now);Save-SupervisorRecovery
                 Start-GuardProxy -SupervisorWorker
@@ -137,6 +137,7 @@ try {
                 Write-SupervisorEvent 'ProxyStarted' @{Pid=$tracked.Pid;ProcessStart=$tracked.Started}
                 $nextProbe=[datetime]::MinValue;Save-SupervisorRecovery
             }
+            if(Sync-GuardProxyProcess -SupervisorWorker){Write-SupervisorEvent 'ProxyTrackingRecovered' (Read-GuardJson (Get-GuardPath 'private\proxy-process.json'))}
             Assert-GuardCore
             $proxyPid=(Read-GuardJson (Get-GuardPath 'private\proxy-process.json')).Pid
             if(-not $owned){$owned=Get-Process -Id $proxyPid;$null=$owned.Handle;Write-SupervisorEvent 'ProxyAdopted' @{Pid=$proxyPid}}

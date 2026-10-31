@@ -1,4 +1,4 @@
-﻿# 计划任务、后台宿主和维护迁移共用的生命周期规则；仅由 ClaudeGuard.psm1 加载。
+# 计划任务、后台宿主和维护迁移共用的生命周期规则；仅由 ClaudeGuard.psm1 加载。
 function Get-GuardLifecycleValue($Object,[string]$Name,$Default=$null) {
     if($null -eq $Object){return $Default}
     if($Object -is [Collections.IDictionary]){if($Object.Contains($Name)){return $Object[$Name]};return $Default}

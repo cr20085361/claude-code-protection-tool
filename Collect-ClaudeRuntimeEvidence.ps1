@@ -11,7 +11,7 @@ $desktop=@(Get-GuardDesktopProcesses)
 $main=@($desktop|Where-Object ProcessId -eq $last.Pid)
 if($main.Count -ne 1 -or (Get-Process -Id $last.Pid).StartTime.ToUniversalTime().Ticks -ne ([datetime]$last.ProcessStart).ToUniversalTime().Ticks){throw 'No matching protected Desktop instance.'}
 $code=@(Get-CimInstance Win32_Process|Where-Object {$_.ExecutablePath -in @($d.CodePaths)})
-$python=Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\python.exe'
+$python=(Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\python.exe')
 $environments=@()
 foreach($p in @($main)+@($code)) {
     $json=& $python (Join-Path $PSScriptRoot 'Read-ClaudeProcessEnvironment.py') $p.ProcessId 2>$null

@@ -1,0 +1,74 @@
+{
+  "version": "v1.4.5",
+  "completed_iterations": 17,
+  "scope": "Sanitized source archive; precise deployed/public fingerprints and byte-preserving Git attributes. No network policy or supervisor restart.",
+  "checks": {
+    "iteration_regression": 27,
+    "local_preview": 33,
+    "supervisor_decisions": 35,
+    "native_listener_cases": 8,
+    "native_listener_samples": 5,
+    "powershell_health": 26,
+    "compiled_health": 26,
+    "native_version_window": 13,
+    "public_powershell_syntax_files": 63,
+    "public_launcher_and_supervisor_compile": true,
+    "installed_exe_version": "1.4.5.0",
+    "actual_ui_version": "v1.4.5",
+    "git_checkout_source_fingerprint_verified": true
+  },
+  "source_fingerprint": {
+    "algorithm": "sha256",
+    "scope": "root-source-and-AGENTS-v1",
+    "sha256": "2c85ab080677b837bccf6948de53617bac5d1bb6b3dfaba9c1ce50844ada7702",
+    "file_count": 69
+  },
+  "public_source_fingerprint": {
+    "algorithm": "sha256",
+    "scope": "root-source-and-AGENTS-v1",
+    "sha256": "2ede0e867f4079f04f16e3181be6ba9947fdc66d95670d379d262f2e30d80ba4",
+    "file_count": 69
+  },
+  "sanitization": [
+    {
+      "path": "ClaudeGuard-Runtime.psm1",
+      "kind": "public-python-default",
+      "substitutions": 1
+    },
+    {
+      "path": "Collect-ClaudeRuntimeEvidence.ps1",
+      "kind": "public-python-default",
+      "substitutions": 1
+    },
+    {
+      "path": "Test-ClaudeLocalPreview.ps1",
+      "kind": "public-python-default",
+      "substitutions": 1
+    },
+    {
+      "path": "Test-ClaudeSupervisorDecisions.ps1",
+      "kind": "public-python-default",
+      "substitutions": 2
+    },
+    {
+      "path": "Watch-ClaudeEnvironmentRead.ps1",
+      "kind": "public-python-default",
+      "substitutions": 1
+    }
+  ],
+  "private_material_included": false,
+  "historical_entries_preserved": 16,
+  "publication_snapshot_preserved": true,
+  "continuity": {
+    "claude_dedicated_shared_proxy_supervisor_host_worker_and_roadmap_gateway_unchanged": true,
+    "protected_file_hashes_unchanged": 7,
+    "supervisor_run_unchanged": true,
+    "network_protection_healthy": true,
+    "roadmap_worker": "Original worker replaced before launcher deployment; this archive did not operate the roadmap service."
+  },
+  "limitations": [
+    "Local evidence hashes are verifiable only on the originating machine.",
+    "Public process-environment fixtures used an isolated LOCALAPPDATA path to the installed Python runtime.",
+    "No additional long-duration or model-response acceptance was performed for this archive."
+  ]
+}

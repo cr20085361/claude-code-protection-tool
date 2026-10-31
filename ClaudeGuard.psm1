@@ -172,10 +172,11 @@ function Initialize-Guard {
     $desktop = Get-GuardDesktop
     $configDir = Join-Path $env:USERPROFILE '.claude-pro-desktop'
     if (Test-Path $configDir) { throw 'Pro config directory already exists; refusing to overwrite.' }
-    $source = 'C:\Example\v2rayN\binConfigs\config.json'
-    $coreSource = 'C:\Example\v2rayN\bin\sing_box\sing-box.exe'
+    $local = Read-GuardJson (Get-GuardPath 'private\bootstrap-local.json')
+    $source = [string]$local.SourceConfig
+    $coreSource = [string]$local.CorePath
     $node = @((Read-GuardJson $source).outbounds | Where-Object { $_.tag -eq 'proxy' -and $_.type -eq 'vless' })
-    if ($node.Count -ne 1 -or $node[0].server -ne '192.0.2.10') { throw 'Source fixed VPS did not match approved node.' }
+    if ($node.Count -ne 1 -or $node[0].server -ne $local.ExpectedIp) { throw 'Source fixed VPS did not match approved node.' }
     $nic = @(Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' })
     if ($nic.Count -ne 1) { throw 'Physical interface is ambiguous; explicit review required.' }
     foreach ($dir in @('private','runtime','evidence','browser-profile')) { New-Item -ItemType Directory -Path (Get-GuardPath $dir) -Force | Out-Null; Protect-GuardDirectory (Get-GuardPath $dir) }
@@ -201,10 +202,10 @@ function Initialize-Guard {
     if ($LASTEXITCODE -ne 0) { throw 'Dedicated sing-box config check failed (details suppressed to protect credentials).' }
     $state = @{
         Schema=1;Created=(Get-Date -Format o);UserSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-        ProxyUrl='http://127.0.0.1:10818';ExpectedIp='192.0.2.10';InterfaceName=$nic[0].Name;InterfaceGuid=$nic[0].InterfaceGuid.ToString()
+        ProxyUrl='http://127.0.0.1:10818';ExpectedIp=[string]$local.ExpectedIp;InterfaceName=$nic[0].Name;InterfaceGuid=$nic[0].InterfaceGuid.ToString()
         ConfigDir=$configDir;Desktop=$desktop;CoreHash=(Get-GuardHash (Get-GuardPath 'runtime\sing-box.exe'));ProxyConfigHash=(Get-GuardHash $cfgPath)
         OriginalCli=@{Path=(Join-Path $env:USERPROFILE '.claude\settings.json');Hash=(Get-GuardHash (Join-Path $env:USERPROFILE '.claude\settings.json'))}
-        SourceSnapshots=@(@{Path=$source;Hash=(Get-GuardHash $source)},@{Path='C:\Example\v2rayN\guiConfigs\guiNConfig.json';Hash=(Get-GuardHash ('C:\Example\v2rayN\guiConfigs\guiNConfig.json'))})
+        SourceSnapshots=@(@{Path=$source;Hash=(Get-GuardHash $source)},@{Path=[string]$local.GuiConfig;Hash=(Get-GuardHash ([string]$local.GuiConfig))})
         PolicyBackup=@{KeyExisted=(Test-Path $script:Policy);Value=(Get-GuardPolicyValue 'egressProxyUrl');Kind=$null}
         CodeCoverage='unverified';CodePaths=@();FirewallInstalled=$false;PolicyInstalled=$false
     }
@@ -332,10 +333,46 @@ function Install-GuardDesktopUserPolicy([switch]$RepairCodeCache) {
         if (Test-Path -LiteralPath $resultPath) { Remove-Item -LiteralPath $resultPath }
     }
 }
-function Get-GuardListener {
-    @(Get-NetTCPConnection -State Listen -LocalPort 10818 -ErrorAction SilentlyContinue)
+function Test-GuardLoopbackAccept([int]$Port=10818) {
+    $client=[Net.Sockets.TcpClient]::new()
+    try {
+        $connect=$client.ConnectAsync([Net.IPAddress]::Loopback,$Port)
+        $connect.Wait(500) -and $client.Connected
+    }catch{$false}finally{$client.Dispose()}
 }
-function Assert-GuardCore([switch]$ConfigurationOnly) {
+function Get-GuardListener {
+    # 本机曾把同一监听端点报告为 0、Closed、FinWait1；State 不能作为存在性的依据。
+    # 只保留无远端的端点，并实际验证接受连接；调用方仍核验地址和进程身份。
+    try{$rows=@(Get-NetTCPConnection -LocalPort 10818 -ErrorAction Stop)}
+    catch{if($_.CategoryInfo.Category -eq 'ObjectNotFound'){return};throw}
+    $endpoints=@($rows|Where-Object {$_.RemotePort -eq 0 -and $_.RemoteAddress -in @('0.0.0.0','::')})
+    if($endpoints.Count -and (Test-GuardLoopbackAccept)){$endpoints}
+}
+function Get-GuardProxyProcessIdentity($Listener) {
+    $d=Get-GuardState;$core=Get-GuardCorePath $d;$cfg=Get-GuardPath 'private\proxy.json'
+    if(-not $Listener -or $Listener.LocalAddress -ne '127.0.0.1'){throw 'Proxy absent or unexpected listeners.'}
+    $live=Get-Process -Id $Listener.OwningProcess -ErrorAction Stop
+    try {
+        $null=$live.Handle
+        $proc=Get-CimInstance Win32_Process -Filter "ProcessId=$($Listener.OwningProcess)" -ErrorAction Stop
+        $command='^\s*"?'+[regex]::Escape($core)+'"?\s+run\s+-c\s+"'+[regex]::Escape($cfg)+'"\s*$'
+        if(-not $proc -or $proc.ExecutablePath -ne $core -or $proc.CommandLine -notmatch $command -or $live.HasExited){throw 'Port belongs to another program or configuration.'}
+        [pscustomobject]@{Pid=[int]$live.Id;Started=$live.StartTime.ToUniversalTime().ToString('o')}
+    }finally{$live.Dispose()}
+}
+function Sync-GuardProxyProcess([switch]$SupervisorWorker) {
+    Assert-GuardCore -ConfigurationOnly
+    $listeners=@(Get-GuardListener)
+    if($listeners.Count -ne 1){throw 'Proxy absent or unexpected listeners.'}
+    $identity=Get-GuardProxyProcessIdentity $listeners[0]
+    $path=Get-GuardPath 'private\proxy-process.json'
+    $tracked=if(Test-Path -LiteralPath $path){Read-GuardJson $path}else{$null}
+    if($tracked -and $tracked.Pid -eq $identity.Pid -and ([datetime]$tracked.Started).ToUniversalTime().Ticks -eq ([datetime]$identity.Started).ToUniversalTime().Ticks){return $false}
+    # 只接管已核验的同一路径、同一配置和真实端点；不根据陈旧 PID 结束任何进程。
+    Write-GuardJson $path @{Pid=$identity.Pid;Started=$identity.Started;SupervisorOwned=[bool]$SupervisorWorker}
+    return $true
+}
+function Assert-GuardCore([switch]$ConfigurationOnly,$ProcessIdentity=$null) {
     $d=Get-GuardState
     $core=Get-GuardCorePath $d
     $cfg=Get-GuardPath 'private\proxy.json'
@@ -351,10 +388,9 @@ function Assert-GuardCore([switch]$ConfigurationOnly) {
     if($ConfigurationOnly){return}
     $listeners=@(Get-GuardListener)
     if ($listeners.Count -ne 1 -or $listeners[0].LocalAddress -ne '127.0.0.1') { throw 'Proxy absent or unexpected listeners.' }
-    $proc=Get-CimInstance Win32_Process -Filter "ProcessId=$($listeners[0].OwningProcess)"
-    if ($proc.ExecutablePath -ne $core -or $proc.CommandLine -notlike ('*'+$cfg+'*')) { throw 'Port belongs to another program or configuration.' }
-    $runtime=Read-GuardJson (Get-GuardPath 'private\proxy-process.json')
-    if ($runtime.Pid -ne $proc.ProcessId -or ([datetime]$runtime.Started).ToUniversalTime().Ticks -ne (Get-Process -Id $proc.ProcessId).StartTime.ToUniversalTime().Ticks) { throw 'Proxy process identity does not match tracked instance.' }
+    $identity=Get-GuardProxyProcessIdentity $listeners[0]
+    $runtime=if($ProcessIdentity){$ProcessIdentity}else{Read-GuardJson (Get-GuardPath 'private\proxy-process.json')}
+    if ($runtime.Pid -ne $identity.Pid -or ([datetime]$runtime.Started).ToUniversalTime().Ticks -ne ([datetime]$identity.Started).ToUniversalTime().Ticks) { throw 'Proxy process identity does not match tracked instance.' }
 }
 function Start-GuardProxy([switch]$SupervisorWorker,[datetime]$DeadlineUtc=[datetime]::MaxValue) {
     $d=Get-GuardState
@@ -372,13 +408,24 @@ function Start-GuardProxy([switch]$SupervisorWorker,[datetime]$DeadlineUtc=[date
     try {
     try{$held=$mutex.WaitOne(10000)}catch [Threading.AbandonedMutexException]{$held=$true}
     if(-not $held){throw 'Dedicated proxy startup is busy.'}
-    if (@(Get-GuardListener).Count) { Assert-GuardCore; return }
+    Assert-GuardCore -ConfigurationOnly
+    if (@(Get-GuardListener).Count) { $null=Sync-GuardProxyProcess -SupervisorWorker:$SupervisorWorker; Assert-GuardCore; return }
     $core=Get-GuardCorePath $d
     if ((Get-GuardHash $core) -ne $d.CoreHash -or (Get-GuardHash (Get-GuardPath 'private\proxy.json')) -ne $d.ProxyConfigHash) { throw 'Proxy hash changed.' }
+    $configured=@(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {$_.ExecutablePath -eq $core -and $_.CommandLine -match ('^\s*"?'+[regex]::Escape($core)+'"?\s+run\s+-c\s+"'+[regex]::Escape((Get-GuardPath 'private\proxy.json'))+'"\s*$')})
+    if($configured.Count){throw 'Dedicated proxy is already running; listener could not be verified.'}
     $p=Start-Process -FilePath $core -ArgumentList @('run','-c',('"'+(Get-GuardPath 'private\proxy.json')+'"')) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Get-GuardPath 'private\proxy.stdout.log') -RedirectStandardError (Get-GuardPath 'private\proxy.stderr.log')
-    Write-GuardJson (Get-GuardPath 'private\proxy-process.json') @{Pid=$p.Id;Started=$p.StartTime.ToUniversalTime().ToString('o');SupervisorOwned=[bool]$SupervisorWorker}
-    for ($i=0;$i -lt 30;$i++) { if (@(Get-GuardListener).Count) { break }; if ($p.HasExited) { throw 'Dedicated proxy failed to start.' }; Start-Sleep -Milliseconds 100 }
-    Assert-GuardCore
+    $committed=$false
+    try {
+        $null=$p.Handle
+        $identity=[pscustomobject]@{Pid=$p.Id;Started=$p.StartTime.ToUniversalTime().ToString('o');SupervisorOwned=[bool]$SupervisorWorker}
+        for ($i=0;$i -lt 30;$i++) { if($p.HasExited){throw 'Dedicated proxy failed to start.'}; if (@(Get-GuardListener).Count) { break }; Start-Sleep -Milliseconds 100 }
+        Assert-GuardCore -ProcessIdentity $identity
+        if($p.HasExited){throw 'Dedicated proxy failed to start.'}
+        # 只有本次创建的进程已实际监听且全部核验通过后，才提交进程身份。
+        Write-GuardJson (Get-GuardPath 'private\proxy-process.json') $identity
+        $committed=$true
+    }finally{if(-not $committed -and -not $p.HasExited){$p.Kill()};$p.Dispose()}
     } finally {if($held){$mutex.ReleaseMutex()};$mutex.Dispose()}
 }
 function Stop-GuardProxy {

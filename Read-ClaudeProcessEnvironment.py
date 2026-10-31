@@ -10,9 +10,13 @@ from urllib.parse import urlsplit
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('pid', type=int)
+parser.add_argument('--local-service-path', help='Exact image of a connected loopback service to verify.')
+parser.add_argument('--local-service-started', type=int, help='Expected process creation FILETIME.')
 parser.add_argument('--timeout-seconds', type=float, default=10.0,
                     help='Read deadline, at most 10 seconds; timeout exits 124 without evidence.')
 args = parser.parse_args()
+if bool(args.local_service_path) != (args.local_service_started is not None):
+    parser.error('local service evidence requires both image and creation time')
 if not 0 < args.timeout_seconds <= 10:
     parser.error('timeout-seconds must be greater than zero and at most 10')
 # A daemon watchdog also bounds native calls that cannot be cancelled by Python.
@@ -30,6 +34,7 @@ k.OpenProcess.restype = w.HANDLE
 k.CloseHandle.argtypes = [w.HANDLE]
 k.QueryFullProcessImageNameW.argtypes = [w.HANDLE, w.DWORD, w.LPWSTR, ctypes.POINTER(w.DWORD)]
 k.ReadProcessMemory.argtypes = [w.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+k.GetProcessTimes.argtypes = [w.HANDLE] + [ctypes.POINTER(w.FILETIME)] * 4
 
 class BasicInfo(ctypes.Structure):
     _fields_ = [('exit', w.LONG), ('peb', ctypes.c_void_p), ('affinity', ctypes.c_size_t),
@@ -54,7 +59,44 @@ try:
     if not k.QueryFullProcessImageNameW(h, 0, image, ctypes.byref(length)):
         raise OSError('Process path could not be verified.')
     approved = [state['Desktop']['Path']] + state['CodePaths']
-    if image.value.casefold() not in [p.casefold() for p in approved]:
+    approved_path = image.value.casefold() in [p.casefold() for p in approved]
+    local_service_verified = False
+    if args.local_service_path:
+        # Resolve aliases such as uv's versionless Python junction before comparing.
+        if pathlib.Path(image.value).resolve() != pathlib.Path(args.local_service_path).resolve():
+            raise ValueError('Local service image changed.')
+        times = [w.FILETIME() for _ in range(4)]
+        if not k.GetProcessTimes(h, *(ctypes.byref(t) for t in times)):
+            raise OSError('Local service creation time unavailable.')
+        started = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+        if started != args.local_service_started:
+            raise ValueError('Local service process identity changed.')
+        adv = ctypes.WinDLL('advapi32', use_last_error=True)
+        adv.OpenProcessToken.argtypes = [w.HANDLE, w.DWORD, ctypes.POINTER(w.HANDLE)]
+        adv.GetTokenInformation.argtypes = [w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD, ctypes.POINTER(w.DWORD)]
+        adv.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(w.LPWSTR)]
+        k.LocalFree.argtypes = [ctypes.c_void_p]
+        token = w.HANDLE()
+        if not adv.OpenProcessToken(h, 8, ctypes.byref(token)):
+            raise OSError('Local service owner unavailable.')
+        try:
+            size = w.DWORD()
+            adv.GetTokenInformation(token, 1, None, 0, ctypes.byref(size))
+            buf = ctypes.create_string_buffer(size.value)
+            if not adv.GetTokenInformation(token, 1, buf, size, ctypes.byref(size)):
+                raise OSError('Local service owner unavailable.')
+            sid = w.LPWSTR()
+            if not adv.ConvertSidToStringSidW(ctypes.c_void_p.from_buffer(buf), ctypes.byref(sid)):
+                raise OSError('Local service owner unavailable.')
+            try:
+                if sid.value != state['UserSid']:
+                    raise ValueError('Local service belongs to another account.')
+            finally:
+                k.LocalFree(ctypes.cast(sid, ctypes.c_void_p))
+        finally:
+            k.CloseHandle(token)
+        local_service_verified = True
+    elif not approved_path:
         raise ValueError('Refusing environment read outside approved Claude paths.')
     pbi = BasicInfo()
     returned = w.ULONG()
@@ -83,7 +125,8 @@ try:
     official_base = (base_url.scheme == 'https' and base_host == 'api.anthropic.com'
                      and base_url.port in (None, 443) and not base_url.username and not base_url.password)
     print(json.dumps({
-        'Pid': pid, 'ApprovedPath': True,
+        'Pid': pid, 'ApprovedPath': approved_path,
+        'LocalServiceIdentityVerified': local_service_verified,
         'ConfigDirMatches': env.get('CLAUDE_CONFIG_DIR', '').casefold() == state['ConfigDir'].casefold(),
         'HttpProxyMatches': env.get('HTTP_PROXY') == state['ProxyUrl'],
         'HttpsProxyMatches': env.get('HTTPS_PROXY') == state['ProxyUrl'],

@@ -1,12 +1,12 @@
-{
+﻿{
   "schema_version": 1,
   "baseline": {
     "version": "v1.0.0",
     "recorded_at": "2026-10-01T12:03:55+08:00",
     "version_source": null
   },
-  "current_version": "v1.3.3",
-  "completed_iterations": 9,
+  "current_version": "v1.4.5",
+  "completed_iterations": 17,
   "history": [
     {
       "id": "1ed80264-8644-40fd-a830-3d725048fa07",
@@ -88,6 +88,461 @@
       "summary": "修复缺失缓存、更新前维护等待、旧引擎权限修复顺序及状态文件1175重试；入口与维护界面显著显示编译版本",
       "verification": "Update 94; maintenance 44 PS + 10 CSharp; cache worker 5; JSON state 12; health 22 paired cases PASS. Real Desktop 2.42304.2.0 / Code 2.1.299 installation, post-maintenance, UI Check and subsequent same-run safety/egress cycle PASS. 13 native version UI cases, rendered header preview, and live x64 launcher 1.3.3.0 deployment PASS; sanitized public snapshot update 94, maintenance 44 PS + 10 CSharp, cache 5, JSON 12 and UI 13 reruns PASS. Authenticated Code session, sleep/relogin and long-run NOT_RUN.",
       "recorded_at": "2026-10-20T19:07:54.248329+08:00"
+    },
+    {
+      "id": "6617b94b-eb2a-57e7-87a4-916156c293e0",
+      "from_version": "v1.3.3",
+      "to_version": "v1.3.4",
+      "level": "patch",
+      "summary": "修复未知本机 SynSent 连接触发守护退出，并验证官方新版查询不终止当前会话",
+      "verification": "34 项守护/运行回归及 33 项版本观察回归；管理员部署成功，实际新版查询及后续守护周期通过，代理身份保留，SafetyStop=0。未提交账户工作任务；长期运行和睡眠恢复未验收。",
+      "recorded_at": "2026-10-31T11:01:56.595844+08:00",
+      "completed_at": "2026-10-21T14:50:42.065970+08:00",
+      "backfilled": true,
+      "version_assignment": "retrospective",
+      "deployed_version_at_completion": "v1.3.3",
+      "public_evidence": [
+        "docs/VALIDATION.md"
+      ],
+      "local_evidence": [
+        {
+          "path": "evidence/runtime-exit-fix-deployment-20261021.json",
+          "sha256": "eb2701c792becba2e951fd8fddcd75d4d9d7291b13703576117e6f5fdb859207"
+        },
+        {
+          "path": "evidence/version-check-live-continuity-20261021.json",
+          "sha256": "39c02974bc48ae1211402670d1fc66ee3eb1846b1b6d00ad61a0d631ed643ec7"
+        }
+      ],
+      "note": "本次按既有成功证据补登记；当时实际入口仍为 v1.3.3，未声称历史已编译或发布过本条分配的版本。"
+    },
+    {
+      "id": "f2d6c596-2c04-521b-997f-5f94b0d6d5e4",
+      "from_version": "v1.3.4",
+      "to_version": "v1.3.5",
+      "level": "patch",
+      "summary": "适配 Desktop 3.x Code 缓存路径，修复执行拒绝导致的 spawn EPERM",
+      "verification": "190 项隔离检查；本机迁移成功，实际新缓存引擎 warmup 成功，运行隔离与专用代理连接通过，异常连接为 0。完整模型回复未验证。",
+      "recorded_at": "2026-10-31T11:01:56.595844+08:00",
+      "completed_at": "2026-10-21T23:20:46.625570+08:00",
+      "backfilled": true,
+      "version_assignment": "retrospective",
+      "deployed_version_at_completion": "v1.3.3",
+      "public_evidence": [
+        "docs/VALIDATION.md"
+      ],
+      "local_evidence": [
+        {
+          "path": "evidence/code-path-adaptation-live.json",
+          "sha256": "e447c02892bb3df242c893c721bdd5318d8cfa48883e90098e9dada3f3f7e8be"
+        }
+      ],
+      "note": "本次按既有成功证据补登记；当时实际入口仍为 v1.3.3，未声称历史已编译或发布过本条分配的版本。"
+    },
+    {
+      "id": "6ea49bfa-a557-5a4b-8dc5-5027be42cacc",
+      "from_version": "v1.3.5",
+      "to_version": "v1.4.0",
+      "level": "minor",
+      "summary": "新增 Xray 双节点池，并修复入口单出口契约及更新记录路径大小写误判",
+      "verification": "节点池 13 项、健康契约 PS/C# 各 26 项等隔离回归；实际部署 Healthy，两站出口通过，实际 EXE 契约和原生绿色窗口确认。第一条节点仍不可达；没有宣称两节点均恢复或完成长期运行验收。",
+      "recorded_at": "2026-10-31T11:01:56.595844+08:00",
+      "completed_at": "2026-10-26T23:22:55.831817+08:00",
+      "backfilled": true,
+      "version_assignment": "retrospective",
+      "deployed_version_at_completion": "v1.3.3",
+      "public_evidence": [
+        "docs/VALIDATION.md"
+      ],
+      "local_evidence": [
+        {
+          "path": "evidence/node-pool-deployment.json",
+          "sha256": "c38ad155288c4aa472702ef75f6ded7019809b60ee3c2f0349b4c5bbbae33ba7"
+        },
+        {
+          "path": "evidence/launcher-node-pool-ui-fix.json",
+          "sha256": "2b6144f22e1d592f19295acfc7f6862db98257733dba39fe8fc42ed5c6dc7c4c"
+        }
+      ],
+      "note": "本次按既有成功证据补登记；当时实际入口仍为 v1.3.3，未声称历史已编译或发布过本条分配的版本。"
+    },
+    {
+      "id": "9953294d-1099-556f-a33b-c7f7040884a3",
+      "from_version": "v1.4.0",
+      "to_version": "v1.4.1",
+      "level": "patch",
+      "summary": "修复监听枚举异常与失败启动覆盖进程记录造成的红色误报",
+      "verification": "监听/跟踪 26 项、守护运行 35 项、PS/C# 健康各 26 项、节点池 13 项；实际入口绿色、后续守护周期通过，两个代理身份和配置保持。应用期间 12/12 探测通过；完整观察 68 次中有一次 6 秒超时，随后恢复。",
+      "recorded_at": "2026-10-31T11:01:56.595844+08:00",
+      "completed_at": "2026-10-31T10:37:31.905681+08:00",
+      "backfilled": true,
+      "version_assignment": "retrospective",
+      "deployed_version_at_completion": "v1.3.3",
+      "public_evidence": [
+        "docs/VALIDATION.md"
+      ],
+      "local_evidence": [
+        {
+          "path": "evidence/proxy-listener-fix-deployment-20261031.json",
+          "sha256": "768879967f123452befc1edcd0ad896058a02c5b54276d4d4c9b3acd77f626f4"
+        },
+        {
+          "path": "evidence/proxy-listener-fix-continuity-20261031.json",
+          "sha256": "412247b8506bb538d0f566a299a4aa5bc93fde15d480b2ae5177d64cd82344cd"
+        },
+        {
+          "path": "evidence/proxy-listener-fix-ui-20261031.json",
+          "sha256": "b07387f8832d6d386d34c6a619652b30b80f9bf51e5781924b39270b4df80bab"
+        }
+      ],
+      "note": "本次按既有成功证据补登记；当时实际入口仍为 v1.3.3，未声称历史已编译或发布过本条分配的版本。"
+    },
+    {
+      "id": "6b3f9416-c97f-4896-948e-25dafa5b91cb",
+      "from_version": "v1.4.1",
+      "to_version": "v1.4.2",
+      "level": "patch",
+      "summary": "恢复迭代版本技能、固化项目收尾规则、按证据补登记四次迭代并增加源码与实际产物一致性门槛",
+      "verification": "技能结构及 UTF-8 元数据校验；22 项版本门槛回归、13 项原生版本窗口、实际安装 EXE 的 PS/C# 健康契约各 26 项通过。实际 EXE/程序集 1.4.2.0，真实窗口标题/页头/页脚 v1.4.2 且绿色 Healthy。仅替换入口，两个代理及原 Desktop 进程身份、守护 RunId/host/worker、代理及防火墙配置保持，应用前后 4/4 TCP/HTTPS 探测通过。未创建 Release/标签，未执行生产故障注入或新的模型任务。",
+      "recorded_at": "2026-10-31T11:06:14.765851+08:00",
+      "validation_scope": "source-and-installed-launcher-verified",
+      "public_evidence": [
+        "docs/VALIDATION.md"
+      ],
+      "local_evidence": [
+        {
+          "path": "evidence/iteration-recovery-candidate-20261031.json",
+          "sha256": "5f086ef50cedc1b3ef7ba8279415ee366db7693c9cba1045fab13e73322c4abb"
+        },
+        {
+          "path": "evidence/iteration-version-deployment-20261031.json",
+          "sha256": "b3b09bb0ea0d3bb70feb65e3c2404856bd5201ba5313bd39e792c2aea24bb881"
+        },
+        {
+          "path": "evidence/iteration-version-native-ui-20261031.json",
+          "sha256": "7d17e967557a66eaca249ddba5cbdb8b1b27602342200a9da14fc15b8b0b661a"
+        },
+        {
+          "path": "evidence/iteration-version-native-ui-20261031.png",
+          "sha256": "110d85af19407697b0cb921de0b64369dafd0e8e65a875da465552328ab34c93"
+        },
+        {
+          "path": "evidence/iteration-version-gate-cases-20261031.json",
+          "sha256": "aa982e9aa765b20cd5ea2ae97bf49c4538ae491da4469c0936b94e23f7fffab2"
+        },
+        {
+          "path": "evidence/iteration-version-window-cases-20261031.json",
+          "sha256": "6b7f0a269e8c04e7b47179da36a557f7087e97a305938f001db18c6b6900012f"
+        },
+        {
+          "path": "evidence/iteration-version-health-contract-20261031.json",
+          "sha256": "5709a82d07fba1384b42ff72239ef16e00339808fa9226a894049aa8b4bda281"
+        },
+        {
+          "path": "evidence/iteration-version-skill-20261031.json",
+          "sha256": "6f9f5d1409c5b0857e5d8282a5289696c30b8f2c7c0b8d499a77b3623c0efe22"
+        }
+      ],
+      "source_fingerprint": {
+        "algorithm": "sha256",
+        "scope": "root-source-and-AGENTS-v1",
+        "sha256": "756ceee4733f9e7432e7ef20c0c1c285c6b5b911d4e51f2057cbd93415e0c4d1",
+        "file_count": 67
+      },
+      "completed_at": "2026-10-31T11:06:14.765851+08:00",
+      "deployed_version_at_completion": "v1.4.2"
+    },
+    {
+      "id": "2882660c-1de2-4971-89e6-35291ec1c803",
+      "from_version": "v1.4.2",
+      "to_version": "v1.4.3",
+      "level": "patch",
+      "summary": "修复父进程退出后的本地预览误停，凭同账号进程身份和专用环境核验回环服务并监测服务出站",
+      "verification": "26 项预览隔离及原生身份检查、35 项既有守护决策、候选及实际安装 EXE 的 PS/C# 健康契约各 26 项、13 项原生版本窗口通过。原 roadmap 真实 TCP surrogate 对照：旧规则不安全，新规则安全。实际 EXE/程序集 1.4.3.0，前台窗口 v1.4.3 绿色健康；Claude 和已核准 Code 2.1.309 已恢复，最终观察 5 个运行安全周期和 5 次出口核验、0 次新 SafetyStop。原 14 条历史保持，仅更新部署的 RuntimeHash/EnvironmentReaderHash；共享代理和 roadmap 身份及受保护配置保持。本次从安全暂停恢复，专用代理和守护产生新身份。未新发模型任务或宣称真实浏览器预览操作、完整模型回复、长期运行已验收。",
+      "recorded_at": "2026-10-31T15:31:22.1292453+08:00",
+      "validation_scope": "source-installed-launcher-and-restored-runtime-verified",
+      "public_evidence": [
+        "docs/VALIDATION.md"
+      ],
+      "local_evidence": [
+        {
+          "path": "private/local-preview-fix-20261031-152535/baseline.json",
+          "sha256": "423793221ada39bea49534f9d9794907319e235364a0c85d417d8e6c084190a1"
+        },
+        {
+          "path": "private/local-preview-fix-20261031-152535/local-preview-regression.json",
+          "sha256": "1b7c755312090172f37e0609a0f675aa3ee1b38c67b8341895d760ae39739d80"
+        },
+        {
+          "path": "private/local-preview-fix-20261031-152535/supervisor-decisions.json",
+          "sha256": "d1bb8dfe125eac3cc768c507710578fb7654d1c6239e6c18256fa4b01ba6b4c9"
+        },
+        {
+          "path": "private/local-preview-fix-20261031-152535/candidate-health-contract.json",
+          "sha256": "510e75323d79646446a95bbae2bbb892cbb61ae2b7e86638c2430e5599273692"
+        },
+        {
+          "path": "private/local-preview-fix-20261031-152535/installed-health-contract.json",
+          "sha256": "12e2e21acf24c7ccefaf8949951cb8b315ef7e65fc45ba320ff7d92978a407d2"
+        },
+        {
+          "path": "private/local-preview-fix-20261031-152535/version-window-regression.json",
+          "sha256": "6b7f0a269e8c04e7b47179da36a557f7087e97a305938f001db18c6b6900012f"
+        },
+        {
+          "path": "private/local-preview-fix-20261031-152535/native-connection-before-after.json",
+          "sha256": "5c01e63368c51b139e4f8872e8d68c031b77c7f9dc6e84f1215c5c232669e24d"
+        },
+        {
+          "path": "private/local-preview-fix-20261031-152535/deployment-result.json",
+          "sha256": "8625c093fed58bd3e28f7f8c11008f6f7842f362d2f2154d4db0d3b5fc65056f"
+        },
+        {
+          "path": "private/local-preview-fix-20261031-152535/final-verification.json",
+          "sha256": "9c1c073839267a1bb2ae9b19446f4fe7a96ee38733b0b19835500166c3ac5c3a"
+        },
+        {
+          "path": "private/local-preview-fix-20261031-152535/actual-guard-window.png",
+          "sha256": "f21e24349addb25ea5aa91a64c808af8bf552e56788952cc49e7d77dc51850ab"
+        },
+        {
+          "path": "private/local-preview-fix-20261031-152535/actual-guard-window.json",
+          "sha256": "77952d16d04e3c4ef42404051742ee0f0d41888e582622c9e40e8a9edad57da5"
+        },
+        {
+          "path": "private/local-preview-fix-20261031-152535/existing-roadmap-native-proof.json",
+          "sha256": "222cc85582fdfe1c7a24662b76fd5dcba4576e1b94b213a2142932dbba870be5"
+        }
+      ],
+      "source_fingerprint": {
+        "algorithm": "sha256",
+        "scope": "root-source-and-AGENTS-v1",
+        "sha256": "d595ae94c62ec18816aef8f42c62f022c933a1e268880505d90d369c912602e5",
+        "file_count": 68
+      },
+      "completed_at": "2026-10-31T15:39:09.951850+08:00",
+      "deployed_version_at_completion": "v1.4.3"
+    },
+    {
+      "id": "b4fc027f-847f-4048-b5a5-ccf5919b3bb0",
+      "from_version": "v1.4.3",
+      "to_version": "v1.4.4",
+      "level": "patch",
+      "summary": "区分监听与临时绑定，修复航图持续刷新误停；核验网关工作进程并记录候选拒绝原因",
+      "verification": "33 项预览回归、35 项既有守护决策、8 种 IPv4/IPv6 原生 bind/listen 对照各 5 次通过；真实绑定反例旧规则拒绝、新规则通过。原航图 HTTP/SSE 替身 160 次安全检查通过，页面加载 71 次、SSE 133 次、错误 0。实际 Claude 内置浏览器保持真实航图页面 385.0 秒，114 次额外只读安全检查、5 次生产守护预览核验、5 次出口核验、0 次新 SafetyStop，手动重载后实时连接恢复。实际 EXE/UI v1.4.4 / 1.4.4.0，PS/C# 健康契约各 26 项、原生版本窗口 13 项通过；84 条防火墙规则及受保护文件不变。部署仅更新 RuntimeHash；共享代理与原航图进程连续，守护和此前已停止的专用代理从安全暂停恢复为新身份。首次部署自动回滚，第二次成功；未新发模型任务，未执行睡眠/重新登录/长期运行验收。",
+      "recorded_at": "2026-10-31T16:10:21.703164+08:00",
+      "validation_scope": "source-installed-ui-real-claude-browser-continuous-refresh-verified",
+      "source_fingerprint": {
+        "algorithm": "sha256",
+        "scope": "root-source-and-AGENTS-v1",
+        "sha256": "dfbc62d863e73ff73ee7f428734da54d92e9ba58338384d3b98cbc84f6f80e50",
+        "file_count": 69
+      },
+      "completed_at": "2026-10-31T16:24:18.361093+08:00",
+      "deployed_version_at_completion": "v1.4.4",
+      "local_evidence": [
+        {
+          "path": "private/preview-listener-fix-20261031-160340/baseline.json",
+          "sha256": "9aa6973ecf232dabb16dd3eed68c88baf71c8a37624c32953264771c4d882230"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/iteration-baseline.json",
+          "sha256": "a2c933a67fff6cb8a417bf735f9404ca66c56a5c4cd2da9bc800556148dcd784"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/local-preview-regression.json",
+          "sha256": "008a5e4441eb3614098a49231de76f5b23c484b27a2dcb6857b74011b0f2acd3"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/tcp-listener-inventory.json",
+          "sha256": "4caa8bb63c53d568654ffe726ca2bf19d5c123a08b963e1ee17b2be665317ffa"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/supervisor-decisions.json",
+          "sha256": "8719b1e0abfaa8d9ceb1cb4c145d8e28872ae19ca7120f55c817adc8d7352f15"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/bound-socket-proof2.json",
+          "sha256": "d0966a2b7982637716295ecd34cd4587e32f78a6683ec6a594e5fca5854aa072"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/real-roadmap-candidate-snapshots.json",
+          "sha256": "3723cb6e88a3bc1a95bb9f67189f805b20167e83f04dca2a7253cf35afd28d23"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/http-refresh-metrics.json",
+          "sha256": "bafd8d59ee97fee0cd15fe200d802b4a297b6c16ab5c8c75a2f6a97ce1fc0b9b"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/candidate-health-contract.json",
+          "sha256": "32b3099f1a9a42494dd2ec35d3ee82dde5d585ee1e0b3dcae74be87ff28031de"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/installed-health-contract.json",
+          "sha256": "9e01f4cf55b7cd31bbd51e6c59b6531f31fb6654c3cf82f2b73ee7fb371f3da1"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/version-window-regression.json",
+          "sha256": "6b7f0a269e8c04e7b47179da36a557f7087e97a305938f001db18c6b6900012f"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/deployment-attempt1.json",
+          "sha256": "963146e44d956184558f2925767b9c66a56092f2258053d1bf32aee76bf1eaa7"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/deployment-result.json",
+          "sha256": "dcd39b35e66d64c55ef29e8009eec10ed05a030ce007466c8de247f2dee1aa33"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/deployment-scope.json",
+          "sha256": "fefec009edc87debb31df8c36e51c834df3959f19e056db9f43152e76024a350"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/protected-validation.json",
+          "sha256": "365b9417dbcfe6e293c6d45517d7c9bda0dc71edf7c0f27357a117fee743d1ce"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/real-claude-browser-validation.json",
+          "sha256": "5ca7e51480330b54af3cd225274592a6d091b8eba015ac96607b301645b31108"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/real-claude-production-checks.json",
+          "sha256": "0ec05b5e9b472579a84245a1f8ba3247e4bb43916eabea3d47c70b89460444ef"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/real-claude-runtime-samples.json",
+          "sha256": "e46894fa359229c8abed6f63b5169810e6c9f96b1c29c361af8d8e60f30fd3b1"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/actual-guard-window.json",
+          "sha256": "6962304a38699edf68e6da515a8ac9fb55bc51f421a4ff4f0a539d9dd26c7563"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/actual-guard-window.png",
+          "sha256": "c3c9a059871c3808db2f1f23c6115b7ece7fa07cff7decbaa83155855a854704"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/actual-roadmap-start.json",
+          "sha256": "ae211364cddf7caa73f40351b23ad06dcaa1c125e3f0f6b627b3b54022deb6c5"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/actual-roadmap-start.png",
+          "sha256": "e54d0a8e52219d020cd9577b8613a2ef8310b090c7d682ae2ec3fb0d27533823"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/actual-roadmap-end.json",
+          "sha256": "60a876d1f67a14065db9c4453568f17943a92cb21f54b91d38270816084acfe4"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/actual-roadmap-end.png",
+          "sha256": "e54d0a8e52219d020cd9577b8613a2ef8310b090c7d682ae2ec3fb0d27533823"
+        },
+        {
+          "path": "private/preview-listener-fix-20261031-160340/browser-reloads.json",
+          "sha256": "e21609d5d26d1a709a267b82912b3ad64de1b8bb141f6743a9c06e5347f55bbf"
+        }
+      ]
+    },
+    {
+      "id": "d8daaff7-13bb-4adc-82db-0d2537b0f0bd",
+      "from_version": "v1.4.4",
+      "to_version": "v1.4.5",
+      "level": "patch",
+      "summary": "补齐公开脱敏源码的精确指纹校验及原始字节存档，保留部署指纹和历史",
+      "verification": "27 项版本回归、公开副本预览 33 项、守护决策 35 项、原生监听 8 种各 5 次、语法及入口/宿主编译通过；实际入口 1.4.5.0、窗口 v1.4.5、健康契约和版本窗口通过。仅替换入口，Claude/代理/守护连续运行，受保护文件哈希不变。",
+      "recorded_at": "2026-10-31T16:42:13.273081+08:00",
+      "source_fingerprint": {
+        "algorithm": "sha256",
+        "scope": "root-source-and-AGENTS-v1",
+        "sha256": "2c85ab080677b837bccf6948de53617bac5d1bb6b3dfaba9c1ce50844ada7702",
+        "file_count": 69
+      },
+      "public_source_fingerprint": {
+        "algorithm": "sha256",
+        "scope": "root-source-and-AGENTS-v1",
+        "sha256": "2ede0e867f4079f04f16e3181be6ba9947fdc66d95670d379d262f2e30d80ba4",
+        "file_count": 69
+      },
+      "validation_scope": "verified-sanitized-source-archive-and-launcher-only-deployment",
+      "completed_at": "2026-10-31T16:48:44.217950+08:00",
+      "local_evidence": [
+        {
+          "path": "private/github-archive-20261031-163804/iteration-baseline.json",
+          "sha256": "90095a75af09ff09db0e3c564163a788fb146a4e1b665e14b7a2746c4e1f6c17"
+        },
+        {
+          "path": "private/github-archive-20261031-163804/continuity-baseline.json",
+          "sha256": "6f0245175399d2281feb46a798bcca8703b00948f98c05431b5efe9303e614c3"
+        },
+        {
+          "path": "private/github-archive-20261031-163804/public-iteration-version-regression.json",
+          "sha256": "49f6dbe84193c4c6743b6b59ea4328dba7e4e52e2f7472fb44ba75990c408bc4"
+        },
+        {
+          "path": "private/github-archive-20261031-163804/public-preview-regression.json",
+          "sha256": "d98a72b30cb99044ce3dff8cb2069f5262539a000f3f4d740438c1ad21bba6fc"
+        },
+        {
+          "path": "private/github-archive-20261031-163804/public-supervisor-regression.json",
+          "sha256": "29b58fe58b422ddae22a23ab16925b77df60dc18a0aabc41a0583cce636f3681"
+        },
+        {
+          "path": "private/github-archive-20261031-163804/public-tcp-listener-regression.json",
+          "sha256": "956d519e2de3a0a5a8ab1386063c56ee09970d6e90c8163696c35c0b768272d4"
+        },
+        {
+          "path": "private/github-archive-20261031-163804/public-boundary-check.json",
+          "sha256": "d89e5f2ffb57543ee9e5365dff6937312f7a9b80b55252e84dca01b564264464"
+        },
+        {
+          "path": "private/github-archive-20261031-163804/public-powershell-syntax.json",
+          "sha256": "0111ee8f98780f86a7623ee39c0075fd8893fa8b849eca01b4c45236fa268262"
+        },
+        {
+          "path": "private/github-archive-20261031-163804/public-binary-check.json",
+          "sha256": "7a3d7336068c37e5f05ac0ef049d025e4f021afc6656549d4fa68dc8cc7c64de"
+        },
+        {
+          "path": "private/github-archive-20261031-163804/candidate-version-check.json",
+          "sha256": "a645d5a91c124d0e3a406183bbbc5e50cd9ce1d2e7d73fae602f589126eea6cf"
+        },
+        {
+          "path": "private/github-archive-20261031-163804/candidate-health-contract.json",
+          "sha256": "46b47a6179773d3d33aba43679d2262d281569c4679852ee5a075b92db866ed9"
+        },
+        {
+          "path": "private/github-archive-20261031-163804/candidate-window-contract.json",
+          "sha256": "6b7f0a269e8c04e7b47179da36a557f7087e97a305938f001db18c6b6900012f"
+        },
+        {
+          "path": "private/github-archive-20261031-163804/installed-version-check.json",
+          "sha256": "a645d5a91c124d0e3a406183bbbc5e50cd9ce1d2e7d73fae602f589126eea6cf"
+        },
+        {
+          "path": "private/github-archive-20261031-163804/installed-health-contract.json",
+          "sha256": "0f426b96383682c096b9cfb7675bb838f7629d3fc0739bc06f5f5bf4568cc86a"
+        },
+        {
+          "path": "private/github-archive-20261031-163804/pre-deployment-continuity.json",
+          "sha256": "3665aae09b3a13e93c03cfa60ca04f3b51d22297d1521a3c7239f6ba8f52f0d6"
+        },
+        {
+          "path": "private/github-archive-20261031-163804/deployment-continuity.json",
+          "sha256": "c7c05a0fc551dddc69de6c444a50f7096fd7f5fdeb4495bb783dd1ed7d57f73a"
+        },
+        {
+          "path": "private/github-archive-20261031-163804/actual-guard-window.json",
+          "sha256": "f545bd85b1f4b690610b51d09501b44579305e40266243dcef86ce4abc97134b"
+        },
+        {
+          "path": "private/github-archive-20261031-163804/actual-guard-window.png",
+          "sha256": "3b7f396a83c723d6a53d06f93ccae04e254319194e72ae95cdf489dd9b51ffb2"
+        },
+        {
+          "path": "private/github-archive-20261031-163804/public-checkout-check.json",
+          "sha256": "f0baf488ef4422af21a50660f1688d6d9769fe3d12b754275f9700f47ed7cbb4"
+        }
+      ]
     }
   ]
 }

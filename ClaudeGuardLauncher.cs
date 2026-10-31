@@ -9,11 +9,11 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
-[assembly: System.Reflection.AssemblyVersion("1.3.3.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.3.3.0")]
+[assembly: System.Reflection.AssemblyVersion("1.4.5.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.4.5.0")]
 
 public sealed class ClaudeGuardWindow : Form {
-    public const string BuildVersion="v1.3.3";
+    public const string BuildVersion="v1.4.5";
     static string ReadSharedText(string path) {
         var retry=Stopwatch.StartNew();
         while(true) {
@@ -63,6 +63,7 @@ public sealed class ClaudeGuardWindow : Form {
     string activeActionKind;
     DateTimeOffset maintenanceRequestStarted;
     public bool PreviewOnly;
+    public bool StatusViewOnly;
     bool maintenanceViewOnly;
     public bool MaintenanceViewOnly {
         get { return maintenanceViewOnly; }
@@ -121,7 +122,7 @@ public sealed class ClaudeGuardWindow : Form {
         versionTimer.Interval=10000;versionTimer.Tick+=async delegate {if(!PreviewOnly)await RefreshVersionInfo(false,DateTimeOffset.UtcNow>=nextCatalogCheck);};versionTimer.Start();
         FormClosed+=delegate {healthTimer.Stop();healthTimer.Dispose();versionTimer.Stop();versionTimer.Dispose();};
         var iconPath=Path.Combine(root,"runtime","claude-guard.ico"); if(File.Exists(iconPath)) Icon=new Icon(iconPath);
-        Shown+=async delegate { if(!PreviewOnly) {var versions=RefreshVersionInfo(false,true);if(ResumeMaintenanceOnOpen() || ResumeDesktopUpdateOnOpen())RefreshNetworkHealth();else if(MaintenanceViewOnly){status.Text="请完全退出 Claude 和本地 Code 后，点击“维护版本”。";RefreshNetworkHealth();}else await RunAction("Start");await versions;} };
+        Shown+=async delegate { if(!PreviewOnly) {var versions=RefreshVersionInfo(false,true);if(ResumeMaintenanceOnOpen() || ResumeDesktopUpdateOnOpen())RefreshNetworkHealth();else if(StatusViewOnly){guardWarning=true;RefreshNetworkHealth();}else if(MaintenanceViewOnly){status.Text="请完全退出 Claude 和本地 Code 后，点击“维护版本”。";RefreshNetworkHealth();}else await RunAction("Start");await versions;} };
     }
     public void RenderVersionInfo(VersionResult info) {
         if(info==null || info.SchemaVersion!=1)throw new InvalidDataException("版本观察记录无效。");
@@ -351,7 +352,7 @@ public sealed class ClaudeGuardWindow : Form {
                 case "UpgradeRequired": networkHealth.Text="Claude 版本已变化，请退出客户端后进行版本维护。";break;
                 case "InterfaceUnavailable": networkHealth.Text="绑定网卡不可用，请等待原网络恢复或重新核验。";break;
                 case "Maintenance": networkHealth.Text="专用组件正在维护，请等待核验完成。";break;
-                case "Backoff": networkHealth.Text="专用代理反复退出，守护将在退避后重试。";break;
+                case "Backoff": networkHealth.Text="专用代理启动重试过于频繁，守护将在退避后重试。";break;
                 default: networkHealth.Text="后台防护检查尚未通过，请重新检查并查看说明。";break;
             }
         } catch {ShowGuardWarning("后台状态暂时无法确认，正在等待自动恢复。");}
@@ -408,7 +409,7 @@ public sealed class ClaudeGuardWindow : Form {
             string retry=DateTimeOffset.TryParse(h.NextProbe,out next) && next>now?"下次重试 "+next.ToLocalTime().ToString("HH:mm:ss")+"。":"后台正在重试。";
             return "固定节点连接检查失败，"+retry+"请检查节点服务和网络。";
         }
-        if(h.Status=="Backoff")return "专用代理反复退出，后台正在退避重试。";
+        if(h.Status=="Backoff")return "专用代理启动重试过于频繁，后台正在退避重试。";
         if(h.Status=="InterfaceUnavailable")return "绑定网卡不可用，请恢复原网络后重新检查。";
         if(h.Status=="UpgradeRequired")return "Claude 版本已变化，请退出客户端后进行版本维护。";
         if(h.Status!="Healthy" && h.Status!="ProbeDegraded")return "后台守护检查尚未完成，正在等待自动恢复。";
@@ -504,6 +505,7 @@ public static class Launcher {
             window.Dispose();return 0;
         }
         if(args.Length==1 && args[0]=="--maintenance")window.MaintenanceViewOnly=true;
+        if(args.Length==1 && args[0]=="--status")window.StatusViewOnly=true;
         bool created;
         using(var single=new Mutex(true,"Local\\ClaudeProGuardLauncher-v1",out created)){
             if(!created){MessageBox.Show("安全入口已在运行，请切换到该窗口。","Claude Pro",MessageBoxButtons.OK,MessageBoxIcon.Information);return 0;}
