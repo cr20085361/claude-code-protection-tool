@@ -2,9 +2,9 @@
 
 面向 **Windows x64、Claude Desktop 及其本地 Code 会话**的桌面安全入口。项目提供专用代理、防火墙与执行门禁核验、后台守护、版本显示，以及官方 Desktop 和配套 Code 的受控更新。
 
-当前源码基线：**v1.4.5 · 第 17 次源码迭代**。采用 [MIT 许可证](LICENSE)。本工具与 Anthropic 无隶属关系，不保证账号不受限制，也不改变服务的支持地区或使用政策。
+当前源码基线：**v1.4.8 · 第 20 次源码迭代**。采用 [MIT 许可证](LICENSE)。本工具与 Anthropic 无隶属关系，不保证账号不受限制，也不改变服务的支持地区或使用政策。
 
-本次源码同步包含 **2026-10-31 预览刷新修复**：以 Windows 原生 IPv4/IPv6 监听专表区分真实监听与临时绑定端口，修复航图持续刷新时的误停；对网关工作进程逐项核验身份和安全环境，并记录拒绝原因。外部直连、共享代理、真实非回环监听和未经核验的本机服务仍拒绝；仅对跨快照的本地连接异常进行一次有界复查。当前入口编译版本为 v1.4.5（1.4.5.0）；具体证据及边界见 [验证记录](docs/VALIDATION.md)。
+本次公开存档包含 v1.4.6 的完整哈希顺序读取优化与 v1.4.7 的 Desktop 5.x 更新兼容修复：识别新版配套 Code 在托管 `disableAutoUpdates` 策略下提前返回的更新检查，下载、维护和首次 Code 准备使用同一控制契约。部署与公开副本分别登记精确源码指纹，保留历史台账及首次公开快照。当前入口编译版本为 v1.4.8（1.4.8.0）；具体证据及边界见 [验证记录](docs/VALIDATION.md)。
 
 ## 能力
 
@@ -24,7 +24,7 @@ v1.3.2 将必要的安装前维护、官方包安装和安装后防护核验接�
 
 这是经过公开边界整理的源码仓库。账号凭据、节点配置、浏览器数据、部署状态、安装包、编译程序和原始验收记录均在本机保留，不随 GitHub 源码同步发布。
 
-`ClaudeGuard.psm1` 初始化段使用 `192.0.2.10` 与 `C:\Example\v2rayN` 示例。它们不是可用节点，不能直接照搬运行。[PUBLICATION.json](PUBLICATION.json) 记录首次 v1.3.0 导出的历史校验值及六处示例替换；后续源码修复以当前 Git 提交及 [验证记录](docs/VALIDATION.md) 为准。本机私有初始化配置和 Python 路径适配未同步到公开源码。
+`ClaudeGuard.psm1` 初始化从本机 `private/bootstrap-local.json` 读取 `SourceConfig`、`CorePath`、`ExpectedIp` 和 `GuiConfig`；该文件由部署者单独准备，不随源码发布。公开源码的 Python 默认路径为 `%LOCALAPPDATA%\Programs\Python\Python311\python.exe`，部署前须核对本机安装路径。[PUBLICATION.json](PUBLICATION.json) 保留首次 v1.3.0 导出的历史校验值及当时六处示例替换；后续源码修复以当前 Git 提交及 [验证记录](docs/VALIDATION.md) 为准。本机私有初始化配置和 Python 路径适配未同步到公开源码。
 
 本仓库目前提供源码及开发者说明，**不是已经验收的通用一键安装包**。首次在其他机器部署，需要审查初始化参数、现有代理/策略、Code 缓存和防火墙，按 [部署说明](docs/DEPLOYMENT.md) 分阶段验收。不要把另一台机器的 `private` 目录复制过来使用。
 
@@ -38,6 +38,7 @@ v1.3.2 将必要的安装前维护、官方包安装和安装后防护核验接�
 git clone https://github.com/cr20085361/claude-code-protection-tool.git
 Set-Location claude-code-protection-tool
 New-Item -ItemType Directory -Path evidence,private -Force | Out-Null
+pwsh -NoProfile -File .\Test-ClaudeDesktopCodeManifest.ps1
 pwsh -NoProfile -File .\Test-ClaudeDesktopUpdate.ps1
 pwsh -NoProfile -File .\Test-ClaudeMaintenance.ps1
 pwsh -NoProfile -File .\Test-ClaudeSupervisorHealth.ps1

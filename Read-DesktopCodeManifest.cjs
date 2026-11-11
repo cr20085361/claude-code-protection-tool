@@ -32,14 +32,27 @@ try {
         || !/^[a-f0-9]{64}$/.test(manifest.manifest.platforms['win32-x64'].checksum)) {
       throw new Error('Unexpected official Code manifest schema or source');
     }
+    const msixAutomaticCodeUpdatesDisabled = source.includes('[CCD-autoupdate] Disabled: MSIX install');
+    const desktopUpdatePolicySupported = source.includes('flatKey:"disableAutoUpdates"');
+    // Desktop 5.x permits Code updates in online MSIX installs. Its polling
+    // callback returns before checking/downloading when the existing managed
+    // disableAutoUpdates policy is enabled. Recognize that guard, not just its
+    // log message (the offline/preseeded-MSIX message alone is insufficient).
+    const identifier = '[A-Za-z_$][\\w$]*';
+    const enterprisePolicyGuard = new RegExp(
+      String.raw`if\s*\(\s*${identifier}\(\)\.autoUpdate\.disabled\s*\)\s*\{\s*(${identifier})\s*\|\|\s*\(\s*\1\s*=\s*!0\s*,\s*${identifier}\.info\("\[CCD-autoupdate\] Disabled by enterprise policy"\)\s*\)\s*;\s*return\s*;?\s*\}`);
+    const enterpriseCodePolicySupported = desktopUpdatePolicySupported && enterprisePolicyGuard.test(source);
     found = {
       desktopCodeVersion: manifest.version,
       baseUrl: manifest.baseUrl,
       platform: manifest.manifest.platforms['win32-x64'],
       sourceChunk: name,
       sourceChunkSha256: crypto.createHash('sha256').update(buffer).digest('hex'),
-      msixAutomaticCodeUpdatesDisabled: source.includes('[CCD-autoupdate] Disabled: MSIX install'),
-      desktopUpdatePolicySupported: source.includes('flatKey:"disableAutoUpdates"'),
+      msixAutomaticCodeUpdatesDisabled,
+      desktopUpdatePolicySupported,
+      codeAutomaticUpdatesControlled: msixAutomaticCodeUpdatesDisabled || enterpriseCodePolicySupported,
+      codeAutoUpdateControl: msixAutomaticCodeUpdatesDisabled ? 'msix-disabled'
+        : enterpriseCodePolicySupported ? 'enterprise-policy' : 'unverified',
     };
     break;
   }

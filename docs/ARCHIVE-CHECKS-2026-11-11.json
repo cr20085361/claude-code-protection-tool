@@ -1,0 +1,82 @@
+{
+  "version": "v1.4.8",
+  "completed_iterations": 20,
+  "scope": "Sanitized source archive of full-hash reading optimization and Desktop 5.x update compatibility; launcher-only version deployment.",
+  "checks": {
+    "metadata_and_consumer_cases": 70,
+    "desktop_update_cases": 94,
+    "maintenance_powershell": 46,
+    "maintenance_csharp": 10,
+    "hash_sizes": 8,
+    "hash_mutation_concurrent_writer_missing": true,
+    "iteration_cases": 27,
+    "local_preview_cases": 33,
+    "supervisor_decision_cases": 35,
+    "native_listener_cases": 8,
+    "native_listener_samples": 5,
+    "public_powershell_syntax_files": 65,
+    "public_python_javascript_syntax": true,
+    "public_launcher_and_supervisor_compiled": true,
+    "candidate_and_installed_powershell_health": 26,
+    "candidate_and_installed_csharp_health": 26,
+    "version_window_cases": 13,
+    "update_window_cases": 79,
+    "installed_exe_version": "1.4.8.0",
+    "actual_ui_version": "v1.4.8"
+  },
+  "source_fingerprint": {
+    "algorithm": "sha256",
+    "scope": "root-source-and-AGENTS-v1",
+    "sha256": "4fa9d96df5cfd08bb4414e3a66910df5bd387fbdf5dfcd16c7dae672fa7ce86d",
+    "file_count": 71
+  },
+  "public_source_fingerprint": {
+    "algorithm": "sha256",
+    "scope": "root-source-and-AGENTS-v1",
+    "sha256": "ac187ec064d065faa5647f8650dc6d8bee5e1e3fc63121d96adbd15859ff816c",
+    "file_count": 71
+  },
+  "sanitization": [
+    {
+      "path": "ClaudeGuard-Runtime.psm1",
+      "kind": "public-python-default",
+      "substitutions": 1
+    },
+    {
+      "path": "Collect-ClaudeRuntimeEvidence.ps1",
+      "kind": "public-python-default",
+      "substitutions": 1
+    },
+    {
+      "path": "Test-ClaudeLocalPreview.ps1",
+      "kind": "public-python-default",
+      "substitutions": 1
+    },
+    {
+      "path": "Test-ClaudeSupervisorDecisions.ps1",
+      "kind": "public-python-default",
+      "substitutions": 2
+    },
+    {
+      "path": "Watch-ClaudeEnvironmentRead.ps1",
+      "kind": "public-python-default",
+      "substitutions": 1
+    }
+  ],
+  "private_material_included": false,
+  "historical_entries_preserved": 19,
+  "publication_snapshot_preserved": true,
+  "continuity": {
+    "proxy_host_worker_identities_preserved": true,
+    "supervisor_run_preserved": true,
+    "protected_files_preserved": 18,
+    "client_processes_preserved": 18,
+    "deployment_approval_preserved": true,
+    "network_protection_healthy": true
+  },
+  "limitations": [
+    "Raw evidence and machine-specific configuration remain local.",
+    "Public native process-environment fixtures used a synthetic state and an isolated LOCALAPPDATA path to the installed Python runtime.",
+    "Client upgrade, post-upgrade Code session and long-duration acceptance were not performed for this archive."
+  ]
+}

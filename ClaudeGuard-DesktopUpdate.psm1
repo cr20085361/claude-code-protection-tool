@@ -89,7 +89,7 @@ function Read-ClaudeDesktopUpdateEngine([string]$Root,[string]$Archive) {
     $text=& node (Join-Path $Root 'Read-DesktopCodeManifest.cjs') $Archive 2>$null
     if($LASTEXITCODE -ne 0 -or -not $text){throw '安装包配套 Code 元数据无法核验。'}
     $m=$text|ConvertFrom-Json
-    if(-not $m.msixAutomaticCodeUpdatesDisabled -or -not $m.desktopUpdatePolicySupported){throw '该包的更新策略兼容性需要另外核对。'}
+    if(-not $m.codeAutomaticUpdatesControlled -or -not $m.desktopUpdatePolicySupported){throw '该包的更新策略兼容性需要另外核对：尚未确认配套 Code 和 Desktop 的自动更新控制机制。'}
     $m
 }
 function Assert-ClaudeDesktopUpdatePackage([string]$Root,[string]$Path,[string]$Version,[string]$ExpectedHash='') {

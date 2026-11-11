@@ -55,7 +55,15 @@ function New-GuardIPv4Config($Config) {
     $copy.route|Add-Member -NotePropertyName rules -NotePropertyValue @([ordered]@{ip_version=6;action='reject'},[ordered]@{action='resolve';strategy='ipv4_only'}) -Force
     $copy
 }
-function Get-GuardHash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
+function Get-GuardHash([string]$Path) {
+    # Full SHA-256 on every call. Large sequential reads avoid small-read overhead
+    # on the large Desktop/Code payloads; no timestamp cache or stale hash reuse.
+    $stream=[IO.FileStream]::new($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read,1048576,[IO.FileOptions]::SequentialScan)
+    try {
+        $sha=[Security.Cryptography.SHA256]::Create()
+        try { [Convert]::ToHexString($sha.ComputeHash($stream)) } finally { $sha.Dispose() }
+    } finally { $stream.Dispose() }
+}
 function Get-GuardCorePath($State=(Get-GuardState)) {
     $engine=Get-GuardLifecycleValue $State 'ProxyEngine' 'sing-box'
     switch($engine){'sing-box'{Get-GuardPath 'runtime\sing-box.exe'} 'xray'{Get-GuardPath 'runtime\xray.exe'} default{throw 'Unsupported dedicated proxy engine.'}}

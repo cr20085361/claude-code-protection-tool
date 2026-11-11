@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -9,11 +9,11 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
-[assembly: System.Reflection.AssemblyVersion("1.4.5.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.4.5.0")]
+[assembly: System.Reflection.AssemblyVersion("1.4.8.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.4.8.0")]
 
 public sealed class ClaudeGuardWindow : Form {
-    public const string BuildVersion="v1.4.5";
+    public const string BuildVersion="v1.4.8";
     static string ReadSharedText(string path) {
         var retry=Stopwatch.StartNew();
         while(true) {

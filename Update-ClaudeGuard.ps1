@@ -252,7 +252,7 @@ $archive=Join-Path (Split-Path $current.Path) 'resources\app.asar'
 $manifest=& node (Join-Path $PSScriptRoot 'Read-DesktopCodeManifest.cjs') $archive
 if($LASTEXITCODE -ne 0){throw 'New Code manifest could not be verified.'}
 $m=$manifest|ConvertFrom-Json
-if(-not $m.msixAutomaticCodeUpdatesDisabled -or -not $m.desktopUpdatePolicySupported){throw 'This Desktop update mechanism requires additional review.'}
+if(-not $m.codeAutomaticUpdatesControlled -or -not $m.desktopUpdatePolicySupported){throw 'This Desktop update mechanism requires additional review.'}
 $compressed=Get-GuardPath ('private\code-'+$m.platform.checksum+'.zst')
 # 已缓存的官方载荷仍在下方完整核验；准备离线候选不依赖正等待本次维护修复的守护。
 if(-not (Test-Path (Get-GuardPath 'private\safety-hold.json')) -and -not (Test-Path -LiteralPath $compressed)){

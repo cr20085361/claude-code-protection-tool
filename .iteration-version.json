@@ -1,12 +1,12 @@
-﻿{
+{
   "schema_version": 1,
   "baseline": {
     "version": "v1.0.0",
     "recorded_at": "2026-10-01T12:03:55+08:00",
     "version_source": null
   },
-  "current_version": "v1.4.5",
-  "completed_iterations": 17,
+  "current_version": "v1.4.8",
+  "completed_iterations": 20,
   "history": [
     {
       "id": "1ed80264-8644-40fd-a830-3d725048fa07",
@@ -543,6 +543,212 @@
           "sha256": "f0baf488ef4422af21a50660f1688d6d9769fe3d12b754275f9700f47ed7cbb4"
         }
       ]
+    },
+{
+  "level": "patch",
+  "to_version": "v1.4.6",
+  "source_fingerprint": {
+    "algorithm": "sha256",
+    "scope": "root-source-and-AGENTS-v1",
+    "sha256": "494666c8dd986aedfb1b51bedebd6844eca72dc8ea3001beef706c44d36f95ed",
+    "file_count": 70
+  },
+  "verification": "Hash boundary/mutation/missing/concurrent-writer regression passed; live full firewall assessment passed in 39.90 seconds versus 146.05 seconds before",
+  "recorded_at": "2026-10-31T23:40:57.9127332+08:00",
+  "from_version": "v1.4.5",
+  "evidence_directory": "private/health-latency-20261031",
+  "summary": "完整哈希改用大缓冲顺序读取，修复守护检查超时告警",
+  "id": "30832a50-6198-4823-b05e-4732ddf3d1b4"
+},
+{
+  "id": "e2cf5dc8-ca41-436a-9fdb-2defad736ac1",
+  "from_version": "v1.4.6",
+  "to_version": "v1.4.7",
+  "level": "patch",
+  "summary": "修复 Desktop 5.x 配套 Code 企业策略更新控制识别，统一下载、维护和首次准备门禁",
+  "verification": "70 metadata/three-consumer checks; 94 update cases; 46 PowerShell + 10 CSharp maintenance; 79 update-window; 13 version-window; 27 iteration checks; candidate and installed PS/CSharp health contracts 26 each PASS. Actual 297627772-byte Desktop 5.1231.2.0 signature/identity and paired Code 2.1.321 cache verified, retained package Ready and actual install button enabled. Installed EXE 1.4.7.0 / actual title-header-footer v1.4.7. Proxy/host/worker/start times/RunId and 18 protected hashes unchanged; 17 client processes retained, current Healthy. Client upgrade/post-upgrade session/long-run NOT_RUN.",
+  "recorded_at": "2026-11-11T16:40:01.0676796+08:00",
+  "source_fingerprint": {
+    "algorithm": "sha256",
+    "scope": "root-source-and-AGENTS-v1",
+    "sha256": "666889ccdb94e78d8c8fe378b66e38b0228bf6feb88827aa57e58c061b7e931f",
+    "file_count": 71
+  },
+  "local_evidence": [
+    {
+      "path": "private/desktop-update-policy-fix-20261111/manifest-regression.json",
+      "sha256": "d039edb4620ec77e9d08aa1e8cf1a12fc3caf99f4d007153473ea248c2f3d227"
+    },
+    {
+      "path": "private/desktop-update-policy-fix-20261111/desktop-update-regression.json",
+      "sha256": "3e503c97e621adeb4eeebd4af2aabac8dc10fdc5afc8f4378abc5e44d7e2598a"
+    },
+    {
+      "path": "private/desktop-update-policy-fix-20261111/version-window-regression.json",
+      "sha256": "565232d7c26b122e38d1fa0bdc87545010a4b6e28188ab93a7fbc202cb432149"
+    },
+    {
+      "path": "private/desktop-update-policy-fix-20261111/update-window-regression.json",
+      "sha256": "8f54b143c79b78c4795b8591420119f8c011817a891283d91b67efab50f2533c"
+    },
+    {
+      "path": "private/desktop-update-policy-fix-20261111/official-package-verification.json",
+      "sha256": "995107adf7a44582c408b19ec58ddfaa7740e1621686602c3dd45c1149c5bdaf"
+    },
+    {
+      "path": "private/desktop-update-policy-fix-20261111/retained-package-ready.json",
+      "sha256": "d3cc2bebb48434c7fd375f86440fc379100d88805a97eb1d850cc7c3d9c30513"
+    },
+    {
+      "path": "private/desktop-update-policy-fix-20261111/root-cause-comparison.json",
+      "sha256": "fe2260be749d89131c4906043799cb5af13cbe9dcf789a3412f9a30b4e51d1b4"
+    },
+    {
+      "path": "private/desktop-update-policy-fix-20261111/actual-window-verification.json",
+      "sha256": "f55a2e1afe827ca3e9e550c616b42d9fa7a2abcfc40246ec418dc30129d1df0a"
+    },
+    {
+      "path": "private/desktop-update-policy-fix-20261111/deployment-continuity.json",
+      "sha256": "e1ea430b82271df73d0f77d342c04ea68820208a1bdce19d6eae015a08a78fa9"
+    },
+    {
+      "path": "private/desktop-update-policy-fix-20261111/installed-version-check.json",
+      "sha256": "2aa1a1c757ce033602f887f273f82563d05c553a6555ea60267f3402fc93021e"
+    },
+    {
+      "path": "private/desktop-update-policy-fix-20261111/installed-health-summary.json",
+      "sha256": "a8f1164a6a30ff4658e703a42f5ffc69e355a2c8c6f2703da59d460ef9319b5a"
+    },
+    {
+      "path": "private/desktop-update-policy-fix-20261111/version-regression.json",
+      "sha256": "b5e6e8c29ffed4656bb63a657c71637b979b75e200ac5e03ced4e42e5fd2575a"
+    },
+    {
+      "path": "private/desktop-update-policy-fix-20261111/syntax-check.json",
+      "sha256": "fdf88fa21bc167c7644a6d8f7bcfc7553c036b735022a821112d86dec91978cb"
     }
+  ],
+  "public_evidence": [
+    "docs/VALIDATION.md"
+  ],
+  "completed_at": "2026-11-11T16:40:01.0676796+08:00"
+},
+{
+  "id": "519538c7-0b94-4668-8383-958761e1f416",
+  "from_version": "v1.4.7",
+  "to_version": "v1.4.8",
+  "level": "patch",
+  "summary": "同步哈希读取与 Desktop 5.x 更新修复的脱敏公开存档，登记部署和公开源码精确指纹并校正初始化文档",
+  "verification": "Public source: 70 metadata/consumer cases, 94 update, 46 PS + 10 CSharp maintenance, 8 hash sizes + mutation/concurrent-writer/missing rejection, 27 iteration, 33 preview, 35 supervisor, 8 native listener cases x 5 samples, 65 PowerShell and Python/JavaScript syntax, public launcher/host compile PASS. Candidate/installed PS/CSharp health 26 each; 13 version-window and 79 update-window PASS. Installed EXE 1.4.8.0; actual title/header/footer v1.4.8, healthy and install button enabled. Proxy/host/worker/RunId, 18 protected hashes and 18 client processes preserved. Public boundary 85 files PASS; prior 19 records and PUBLICATION unchanged. No client upgrade or long-run validation.",
+  "recorded_at": "2026-11-11T16:52:31.5540037+08:00",
+  "source_fingerprint": {
+    "algorithm": "sha256",
+    "scope": "root-source-and-AGENTS-v1",
+    "sha256": "4fa9d96df5cfd08bb4414e3a66910df5bd387fbdf5dfcd16c7dae672fa7ce86d",
+    "file_count": 71
+  },
+  "public_source_fingerprint": {
+    "algorithm": "sha256",
+    "scope": "root-source-and-AGENTS-v1",
+    "sha256": "ac187ec064d065faa5647f8650dc6d8bee5e1e3fc63121d96adbd15859ff816c",
+    "file_count": 71
+  },
+  "public_evidence": [
+    "docs/ARCHIVE-CHECKS-2026-11-11.json",
+    "docs/VALIDATION.md"
+  ],
+  "completed_at": "2026-11-11T16:52:31.5540037+08:00",
+  "validation_scope": "verified-sanitized-source-archive-and-launcher-only-deployment",
+  "local_evidence": [
+    {
+      "sha256": "b926e341dc4f1ed3cb320e52d6888646de5f0a2a7e7e95a5fb8b53721ebefa88",
+      "path": "private/github-archive-20261111/baseline.json"
+    },
+    {
+      "sha256": "153f768c8fda44e8b482c098e7404a31785871aade734c0c43d81fec823505f4",
+      "path": "private/github-archive-20261111/export-transformations.json"
+    },
+    {
+      "sha256": "e8cb66903bec1f19bac23d6e5b0254a873903e71ba5ff74267b0c5fdaa524fdd",
+      "path": "private/github-archive-20261111/public-manifest-regression.json"
+    },
+    {
+      "sha256": "3ed67628a2d4cf0aaf17345d8796ddb9d0bd112d1e4402ddf285523aedaf554b",
+      "path": "private/github-archive-20261111/public-update-regression.json"
+    },
+    {
+      "sha256": "b68765981dcd449e62a17faeabdc03f0ed7b4855097aa7ba91097c7a057ec2ad",
+      "path": "private/github-archive-20261111/public-maintenance-regression.json"
+    },
+    {
+      "sha256": "da98f113ba95d2b9f9de9ec0c36115f8bbf8f27007e3a2ddb66def6d608fcff6",
+      "path": "private/github-archive-20261111/public-hash-regression.json"
+    },
+    {
+      "sha256": "dcf62c93026bbe5470519382e877f3eba429fcf8ebec0284734c1e35ec16cf29",
+      "path": "private/github-archive-20261111/public-version-regression.json"
+    },
+    {
+      "sha256": "47ab02a667968b409a8c1c27c5aec2698aa8ecb2c3a181e8d97ae1d486f4e1e9",
+      "path": "private/github-archive-20261111/public-preview-regression.json"
+    },
+    {
+      "sha256": "aa5f7f2af38c87fe2d5f9d6bd9bc7341726638bac8b810f5fdb18cb7358831cd",
+      "path": "private/github-archive-20261111/public-supervisor-regression.json"
+    },
+    {
+      "sha256": "66b1c8023dacf9551e5f46ee096f9ec425fb6706c0196d18a475e7fddd5b2a26",
+      "path": "private/github-archive-20261111/public-listener-regression.json"
+    },
+    {
+      "sha256": "38f7c7caeb44113447aa35a2a06711ead98dd7edc55e61e64fec74f6ee6f23ee",
+      "path": "private/github-archive-20261111/public-boundary-check.json"
+    },
+    {
+      "sha256": "2e5f1facee08c6b7d0c4380dcdf08ac014fcaec3c60dfa535f59fc8b19fad270",
+      "path": "private/github-archive-20261111/public-powershell-syntax.json"
+    },
+    {
+      "sha256": "cf28aa9f9c46e99792c7bf7121f20c51543189a4f88d6f2106ee6638f82caa01",
+      "path": "private/github-archive-20261111/public-binary-check.json"
+    },
+    {
+      "sha256": "7997a7c3ecb61c693720a3237a87dfc27b2d4d5ec9e24dc66dac0b14c277dd34",
+      "path": "private/github-archive-20261111/candidate-version-check.json"
+    },
+    {
+      "sha256": "7e944f64beb1eb7770d3f0f9dbd642f9bc426b8c3b6c7e597f1b7a19bb15569d",
+      "path": "private/github-archive-20261111/candidate-health-contract.json"
+    },
+    {
+      "sha256": "565232d7c26b122e38d1fa0bdc87545010a4b6e28188ab93a7fbc202cb432149",
+      "path": "private/github-archive-20261111/candidate-version-window.json"
+    },
+    {
+      "sha256": "8f54b143c79b78c4795b8591420119f8c011817a891283d91b67efab50f2533c",
+      "path": "private/github-archive-20261111/candidate-update-window.json"
+    },
+    {
+      "sha256": "7997a7c3ecb61c693720a3237a87dfc27b2d4d5ec9e24dc66dac0b14c277dd34",
+      "path": "private/github-archive-20261111/installed-version-check.json"
+    },
+    {
+      "sha256": "c28f4736b0eb469c60bf8fd7a021868a89a0ea8ac995d198c4b2d70ccfa7883a",
+      "path": "private/github-archive-20261111/installed-health-contract.json"
+    },
+    {
+      "sha256": "d1195afc6a4dbce7489461ded099e349c9863b93593cc0fb98edfefeae002842",
+      "path": "private/github-archive-20261111/actual-window-verification.json"
+    },
+    {
+      "sha256": "f2c3a4fd045ce4e085f1cc39bdcb42487b12a57fe1fc9360de42ba56166bd138",
+      "path": "private/github-archive-20261111/pre-deployment-continuity.json"
+    },
+    {
+      "sha256": "c5f58f089b99358a1d8cc1326428d916061a318459227903792b76d768620229",
+      "path": "private/github-archive-20261111/deployment-continuity.json"
+    }
+  ]
+}
   ]
 }

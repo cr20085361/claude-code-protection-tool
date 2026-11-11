@@ -26,7 +26,7 @@ $archive=Join-Path ([IO.Path]::GetDirectoryName($desktop.Path)) 'resources\app.a
 $manifestText=& node (Join-Path $PSScriptRoot 'Read-DesktopCodeManifest.cjs') $archive
 if ($LASTEXITCODE -ne 0) { throw 'Could not read the installed official Code manifest.' }
 $m=$manifestText|ConvertFrom-Json
-if (-not $m.msixAutomaticCodeUpdatesDisabled -or $m.desktopCodeVersion -notmatch '^\d+\.\d+\.\d+$' -or ([uri]$m.baseUrl).Host -ne 'downloads.claude.ai') { throw 'Unexpected engine/update source; review required.' }
+if (-not $m.codeAutomaticUpdatesControlled -or -not $m.desktopUpdatePolicySupported -or $m.desktopCodeVersion -notmatch '^\d+\.\d+\.\d+$' -or ([uri]$m.baseUrl).Host -ne 'downloads.claude.ai') { throw 'Unexpected engine/update source; review required.' }
 Write-GuardJson (Get-GuardPath 'evidence\desktop-code-manifest.json') $m
 $roots=@(Get-GuardCodeCacheRoots $desktop)
 $gateBackupPath=Get-GuardPath 'private\code-gate-backup.json'
