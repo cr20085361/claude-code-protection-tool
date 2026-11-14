@@ -1,0 +1,54 @@
+# Mihomo / Clash Verge 非 TUN 模式优化配置参考模板
+# 关键要点：mixed-port + udp: true、远端 DoH、ipv6: false、AI 域名严禁使用 url-test 自动跳节点
+
+mixed-port: 7890
+allow-lan: false
+mode: rule
+log-level: warning
+ipv6: false
+
+dns:
+  enable: true
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  nameserver:
+    - https://1.1.1.1/dns-query#ClaudeFixedVps
+    - https://8.8.8.8/dns-query#ClaudeFixedVps
+  proxy-server-nameserver:
+    - 223.5.5.5
+
+proxies:
+  - name: "Fixed-VPS-Node"
+    type: vless
+    server: YOUR_VPS_IPV4
+    port: 443
+    uuid: YOUR_UUID
+    network: tcp
+    tls: true
+    udp: true
+    flow: xtls-rprx-vision
+    servername: www.nvidia.com
+    reality-opts:
+      public-key: YOUR_REALITY_PUBLIC_KEY
+      short-id: YOUR_SHORT_ID
+    client-fingerprint: chrome
+
+proxy-groups:
+  # 严禁对该策略组使用 url-test / fallback 自动切换，防止 OAuth / 会话期间出口 IP 跳变
+  - name: "ClaudeFixedVps"
+    type: select
+    proxies:
+      - "Fixed-VPS-Node"
+
+rules:
+  - DOMAIN-SUFFIX,anthropic.com,ClaudeFixedVps
+  - DOMAIN-SUFFIX,claude.ai,ClaudeFixedVps
+  - DOMAIN-SUFFIX,claudeusercontent.com,ClaudeFixedVps
+  - DOMAIN-SUFFIX,openai.com,ClaudeFixedVps
+  - DOMAIN-SUFFIX,chatgpt.com,ClaudeFixedVps
+  - DOMAIN-SUFFIX,oaistatic.com,ClaudeFixedVps
+  - DOMAIN-SUFFIX,oaiusercontent.com,ClaudeFixedVps
+  - DOMAIN-SUFFIX,ipkk.com,ClaudeFixedVps
+  - GEOIP,LAN,DIRECT,no-resolve
+  - MATCH,ClaudeFixedVps

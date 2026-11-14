@@ -2,7 +2,7 @@
 
 面向 **Windows x64、Claude Desktop 及其本地 Code 会话**的桌面安全入口。项目提供专用代理、防火墙与执行门禁核验、后台守护、版本显示，以及官方 Desktop 和配套 Code 的受控更新。
 
-当前源码基线：**v1.4.8 · 第 20 次源码迭代**。采用 [MIT 许可证](LICENSE)。本工具与 Anthropic 无隶属关系，不保证账号不受限制，也不改变服务的支持地区或使用政策。
+当前源码基线：**v1.6.1 · 第 24 次源码迭代**。采用 [MIT 许可证](LICENSE)。本工具与 Anthropic 无隶属关系，不保证账号不受限制，也不改变服务的支持地区或使用政策。
 
 本次公开存档包含 v1.4.6 的完整哈希顺序读取优化与 v1.4.7 的 Desktop 5.x 更新兼容修复：识别新版配套 Code 在托管 `disableAutoUpdates` 策略下提前返回的更新检查，下载、维护和首次 Code 准备使用同一控制契约。部署与公开副本分别登记精确源码指纹，保留历史台账及首次公开快照。当前入口编译版本为 v1.4.8（1.4.8.0）；具体证据及边界见 [验证记录](docs/VALIDATION.md)。
 
@@ -15,6 +15,8 @@
 - 显示已安装 Desktop、该包配套 Code、已核准 Code，以及实际观察到的本地 Code 运行版本。
 - 查询官方 Windows x64 MSIX 当前发布，下载并核验官方包及配套 Code；更高版本才允许安装，安装后接续防护迁移和守护核验。
 - 保存维护操作身份和最终结果，支持入口关闭重开接续，区分等待、明确授权取消、中断、失败和完成。
+- v1.5.0 集成非 TUN 网络环境优化能力：提供本地代理 SOCKS5 / UDP Associate 探测、Chrome/Edge 用户级防 WebRTC UDP 与 DoH 泄露策略（可备份还原）、显式 `socks5://` 英文隔离检测浏览器、面向 `claude` / `codex` 等独立终端 CLI 的代理环境变量注入与连通性自检，以及入口「网络优化」交互面板。
+- v1.6.0 新增启动前网络环境风险评分与门禁拦截，并采用简约现代卡片式重构安全入口 UI：内置 `0–100` 风险评分模型（`A+`–`D` 级）与可配置门限（默认 `≤ 20`），高于门限时在启动 Claude 前拦截并引导一键防泄露修复；入口与网络优化弹窗支持风险分实时刷新、门限开关/数值调节及扣分明细可视化，同时保留全部守护、更新与无障碍契约。
 
 v1.3.2 将必要的安装前维护、官方包安装和安装后防护核验接入同一次“安装并维护”操作，无需先手动维护再回来安装；健康状态下直接安装。入口按实际进程刷新“Claude 已打开 / 打开 Claude”，安装期间显示“更新进行中”。资源占用失败仍保留已核验包供重试。
 
@@ -47,6 +49,7 @@ pwsh -NoProfile -File .\Test-ClaudeVersionInfo.ps1
 pwsh -NoProfile -File .\Test-ClaudeNodePool.ps1
 pwsh -NoProfile -File .\Test-ClaudeProxyTracking.ps1
 pwsh -NoProfile -File .\Test-ClaudeIterationVersionFixtures.ps1
+pwsh -NoProfile -File .\Test-ClaudeNetworkEnv.ps1
 pwsh -NoProfile -File .\Test-ClaudeIterationVersion.ps1
 ```
 
@@ -58,7 +61,8 @@ pwsh -NoProfile -File .\Test-ClaudeIterationVersion.ps1
 
 | 模块 | 职责 |
 |---|---|
-| `ClaudeGuardLauncher.cs`、`ClaudeGuard-UiBridge.ps1` | Windows Forms 入口、启动与检查、维护进度 |
+| `ClaudeGuardLauncher.cs`、`ClaudeGuard-UiBridge.ps1` | Windows Forms 入口、启动与检查、维护进度、网络优化面板 |
+| `ClaudeGuard-NetworkEnv.psm1`、`Get-ClaudeNetworkEnv.ps1`、`Set-ClaudeWebRtcPolicy.ps1`、`Start-ClaudeSafeBrowser.ps1`、`Set-ClaudeCliProxy.ps1` | 非 TUN 网络环境基线诊断、SOCKS5/UDP 探测、浏览器防泄露策略、安全隔离浏览器与 CLI 代理适配 |
 | `ClaudeGuard.psm1`、`ClaudeCodeGate.psm1` | 部署状态、代理策略、防火墙和 Code 执行门禁 |
 | `ClaudeGuard-Lifecycle.ps1`、`ClaudeGuard-Health.ps1` | 操作关联、任务生命周期及当次守护就绪契约 |
 | `ClaudeSupervisorHost.cs`、`ClaudeGuard-Supervisor-v2.ps1` | 独立宿主、守护、有限恢复及持久退避 |

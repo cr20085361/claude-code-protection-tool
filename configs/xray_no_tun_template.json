@@ -1,0 +1,107 @@
+{
+  "_comment": "Xray (v2rayN 等) 非 TUN 模式参考模板：重点开启 local mixed udp=true、固定单一出口、屏蔽 IPv6 与远端 DNS",
+  "log": {
+    "loglevel": "warning"
+  },
+  "dns": {
+    "servers": [
+      {
+        "address": "https://1.1.1.1/dns-query",
+        "skipFallback": false
+      }
+    ],
+    "queryStrategy": "UseIPv4"
+  },
+  "inbounds": [
+    {
+      "tag": "mixed-in",
+      "listen": "127.0.0.1",
+      "port": 10808,
+      "protocol": "mixed",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls", "quic"]
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "fixed-vps",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "YOUR_VPS_IPV4",
+            "port": 443,
+            "users": [
+              {
+                "id": "YOUR_UUID",
+                "encryption": "none",
+                "flow": "xtls-rprx-vision"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "raw",
+        "security": "reality",
+        "realitySettings": {
+          "serverName": "www.nvidia.com",
+          "fingerprint": "chrome",
+          "publicKey": "YOUR_REALITY_PUBLIC_KEY",
+          "shortId": "YOUR_SHORT_ID"
+        },
+        "sockopt": {
+          "domainStrategy": "UseIPv4"
+        }
+      }
+    },
+    {
+      "tag": "direct",
+      "protocol": "freedom"
+    },
+    {
+      "tag": "block",
+      "protocol": "blackhole"
+    }
+  ],
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        "type": "field",
+        "ip": ["::/0"],
+        "outboundTag": "block"
+      },
+      {
+        "type": "field",
+        "domain": [
+          "domain:anthropic.com",
+          "domain:claude.ai",
+          "domain:claudeusercontent.com",
+          "domain:openai.com",
+          "domain:chatgpt.com",
+          "domain:oaistatic.com",
+          "domain:oaiusercontent.com",
+          "domain:ipkk.com"
+        ],
+        "outboundTag": "fixed-vps"
+      },
+      {
+        "type": "field",
+        "ip": ["geoip:private"],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "network": "tcp,udp",
+        "outboundTag": "fixed-vps"
+      }
+    ]
+  }
+}

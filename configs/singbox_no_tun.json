@@ -1,0 +1,85 @@
+{
+  "_comment": "sing-box 非 TUN 模式优化参考模板：开启 mixed 入站、远程 DoH、IPv4 优先与 AI 域名固定出口",
+  "log": {
+    "level": "warn",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "https",
+        "tag": "remote-doh",
+        "server": "1.1.1.1",
+        "server_port": 443,
+        "path": "/dns-query",
+        "tls": {
+          "enabled": true,
+          "server_name": "cloudflare-dns.com"
+        },
+        "detour": "fixed-vps"
+      }
+    ],
+    "final": "remote-doh",
+    "strategy": "ipv4_only"
+  },
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "127.0.0.1",
+      "listen_port": 10808
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "fixed-vps",
+      "server": "YOUR_VPS_IPV4",
+      "server_port": 443,
+      "uuid": "YOUR_UUID",
+      "flow": "xtls-rprx-vision",
+      "tls": {
+        "enabled": true,
+        "server_name": "www.nvidia.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "YOUR_REALITY_PUBLIC_KEY",
+          "short_id": "YOUR_SHORT_ID"
+        }
+      }
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "final": "fixed-vps",
+    "default_domain_resolver": "remote-doh",
+    "rules": [
+      {
+        "ip_version": 6,
+        "action": "reject"
+      },
+      {
+        "domain_suffix": [
+          "anthropic.com",
+          "claude.ai",
+          "claudeusercontent.com",
+          "openai.com",
+          "chatgpt.com",
+          "ipkk.com"
+        ],
+        "outbound": "fixed-vps"
+      },
+      {
+        "ip_is_private": true,
+        "outbound": "direct"
+      }
+    ]
+  }
+}

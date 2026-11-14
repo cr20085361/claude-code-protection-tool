@@ -88,6 +88,7 @@ try {
     function Write-GuardJson([string]$Path,$Value){[IO.File]::WriteAllText($Path,($Value|ConvertTo-Json -Depth 40),[Text.UTF8Encoding]::new($false))}
     $global:LifecycleFixtureState=[pscustomobject]@{UserSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;ConfigDir=(Join-Path $scratch 'config');OriginalCli=[pscustomobject]@{Path=(Join-Path $scratch 'original-cli.json')};CodePaths=@();Reliability=[pscustomobject]@{TaskName='ClaudeProGuard-Supervisor';SupervisorScript='ClaudeGuard-Supervisor-v2.ps1';GuardHash='fixture-hash';SupervisorHash='fixture-hash';RuntimeHash='fixture-hash';EnvironmentReaderHash='fixture-hash';FutureField='preserved'}}
     function Get-GuardState {$global:LifecycleFixtureState}
+    function Get-GuardCorePath($State){Get-GuardPath 'runtime\sing-box.exe'}
     $backup=Join-Path $scratch 'private\supervisor-fix-backup-fixture';New-Item -ItemType Directory -Path $backup|Out-Null
     [IO.File]::WriteAllText((Get-GuardPath 'private\active-supervisor-fix-backup.txt'),$backup)
     foreach($name in @('ClaudeGuard.psm1','ClaudeGuard-Supervisor-v2.ps1','ClaudeGuard-Runtime.psm1','Read-ClaudeProcessEnvironment.py')){

@@ -1,5 +1,5 @@
 ﻿[CmdletBinding()]
-param([Parameter(Mandatory)][string]$Url)
+param([Parameter(Mandatory)][string]$Url,[switch]$UseSocks5)
 $ErrorActionPreference='Stop'
 Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard.psm1') -Force
 $uri=[uri]$Url
@@ -12,5 +12,14 @@ $proof=Read-GuardJson (Get-GuardPath 'evidence\browser-failure-test.json')
 if (-not $proof.Passed -or $proof.BypassList -ne 'localhost;127.0.0.1;[::1]' -or -not $proof.LoopbackCallbackWorks) { throw 'Dedicated browser has not passed its current proxy and local callback tests.' }
 $chrome='C:\Program Files\Google\Chrome\Application\chrome.exe'
 if ((Get-GuardHash $chrome) -ne $proof.ChromeHash) { throw 'Browser changed; repeat failure test before login.' }
-$arguments=@(('--user-data-dir="'+(Get-GuardPath 'browser-profile')+'"'),'--proxy-server=http://127.0.0.1:10818','--proxy-bypass-list=localhost;127.0.0.1;[::1]','--disable-quic','--no-first-run','--no-default-browser-check',('"'+$uri.AbsoluteUri+'"'))
+$netEnvModule = Join-Path $PSScriptRoot 'ClaudeGuard-NetworkEnv.psm1'
+if (Test-Path -LiteralPath $netEnvModule) {
+    Import-Module $netEnvModule -Force
+    $policyStatus = @(Get-NetworkEnvBrowserPolicyStatus -Browsers @('Chrome'))[0]
+    if (-not $policyStatus.FullyProtected) {
+        Write-Warning 'Chrome 尚未启用 WebRTC/DoH 防泄露策略；建议运行 Set-ClaudeWebRtcPolicy.ps1 -Enable 后再登录。'
+    }
+}
+$proxyArg = if ($UseSocks5) { '--proxy-server=socks5://127.0.0.1:10818' } else { '--proxy-server=http://127.0.0.1:10818' }
+$arguments=@(('--user-data-dir="'+(Get-GuardPath 'browser-profile')+'"'),$proxyArg,'--proxy-bypass-list=localhost;127.0.0.1;[::1]','--disable-quic','--no-first-run','--no-default-browser-check',('"'+$uri.AbsoluteUri+'"'))
 $null=Start-Process -FilePath $chrome -ArgumentList $arguments -WindowStyle Normal -PassThru -RedirectStandardOutput (Get-GuardPath 'private\login-browser.stdout.log') -RedirectStandardError (Get-GuardPath 'private\login-browser.stderr.log')

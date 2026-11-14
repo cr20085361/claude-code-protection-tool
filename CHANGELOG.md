@@ -1,6 +1,35 @@
 # 更新记录
 
-当前版本 **v1.4.8 · 第 20 次源码迭代**。
+当前版本 **v1.6.1 · 第 24 次源码迭代**。
+
+## v1.6.1 (2026-11-14)
+
+修复标准用户运行「一键防泄露修复」或「仅写浏览器策略」时因 Windows `HKCU\Software\Policies` 受系统 ACL 保护而报错 `Access denied` 的问题：
+
+- **注册表可写性预检与 UAC 自动提权写入**（`ClaudeGuard-NetworkEnv.psm1`、`Set-ClaudeWebRtcPolicy.ps1`、`ClaudeGuard-UiBridge.ps1`）：新增 `Test-NetworkEnvPolicyRegistryWritable` 与 `Invoke-NetworkEnvElevatedBrowserPolicy`；检测到 `HKCU\Software\Policies` 无写权限时通过 Windows 原生 UAC 请求同账号管理员授权并按 `-TargetUserSid` 精确写入对应用户注册表配置，取消授权时给出清晰提示。
+- **CLI 先行补齐与弹窗细节打磨**（`ClaudeGuardLauncher.cs` `v1.6.1` / `1.6.1.0`）：一键修复优先写入无需提权的 CLI 代理环境变量，将桥接等待超时提升至 120s 适配 UAC 交互，并加宽网络优化弹窗的检测 URL 输入框与明细说明列宽。
+
+## v1.6.0 (2026-11-14)
+
+在 `v1.5.0` 非 TUN 网络环境优化能力之上，新增**启动前网络环境风险评分门禁**并完成安全入口 UI 的**简约现代优雅重构**：
+
+- **网络环境风险评分引擎与门禁配置**（`ClaudeGuard-NetworkEnv.psm1`、`Get-ClaudeNetworkEnv.ps1`）：新增 `Get-NetworkEnvRiskConfig` / `Set-NetworkEnvRiskConfig`（配置落盘于 `private\network-env-config.json`，默认启用门禁且门限 `MaxRiskScore = 20`）、`Get-NetworkEnvRiskScore`（`0–100` 分、`A+`/`A`/`B`/`C`/`D` 级，覆盖节点基准、本地代理端口、WebRTC/DoH 防泄露、SOCKS5 UDP、系统代理/PAC、出口连通性、时区指纹、IPv6 暴露与 CLI 代理变量）及 `Assert-NetworkEnvRiskGate`。
+- **启动前门禁强制拦截**（`ClaudeGuard-UiBridge.ps1`、`Start-ClaudePro.ps1`）：在 `Start` 启动 Claude 前自动评分校验，超过设定门限立即阻止启动并返回具体扣分原因；新增 `NetworkEnvScore`、`NetworkEnvSetGate`、`NetworkEnvAutoFix` 桥接动作。
+- **简约现代卡片式 UI 重构**（`ClaudeGuardLauncher.cs` `v1.6.0` / `1.6.0.0`）：引入 GDI+ 双缓冲圆角纯白卡片与动态状态顶条、扁平色彩按钮层级、右上角风险评分胶囊徽章，以及内嵌门限调节器、`一键防泄露修复`、`重测评分` 与重构后的分项评分优化弹窗，同时严格兼容既有高 DPI 与 UIA/反射测试契约。
+
+## v1.5.0 (2026-11-14)
+
+在保留现有核心安全模块哈希、后台守护及桌面/Code 防护边界不变的前提下，原生集成非 TUN 网络环境优化能力（新增独立模块 `ClaudeGuard-NetworkEnv.psm1` 及配套命令行与入口面板）：
+
+- **基线诊断与 SOCKS5/UDP 实测探针**（`Get-ClaudeNetworkEnv.ps1`）：自动检查系统代理、本地常用代理端口（`10818`/`10808` 等）SOCKS5 握手与 `UDP ASSOCIATE` 支持状态、Chrome/Edge 防泄露策略、CLI 代理环境变量、本机时区与 IPv6 状态，并支持无账号出口与 Anthropic/OpenAI API TLS 握手探测。
+- **浏览器防 WebRTC / DoH 泄露策略**（`Set-ClaudeWebRtcPolicy.ps1`）：写入当前用户级 Chrome/Edge 策略（`WebRtcIPHandling=disable_non_proxied_udp`、`DnsOverHttpsMode=off`、`BuiltInDnsClientEnabled=0`），启用前自动备份原配置至 `private\network-env-policy-backup.json`，支持一键无损还原。
+- **安全隔离检测浏览器**（`Start-ClaudeSafeBrowser.ps1`）：使用显式 `socks5://` 远程 DNS 解析、`--disable-quic`、`--lang=en-US` 与独立 `browser-safe-profile/` 启动 Chrome/Edge；`Start-ClaudeLoginBrowser.ps1` 保持原安全契约并新增可选 `-UseSocks5` 与策略提醒。
+- **独立 Agent CLI 代理适配**（`Set-ClaudeCliProxy.ps1`）：支持为 `claude` / `codex` 等独立终端 CLI 提供会话级拉起包装、PowerShell 环境片段导出及可回滚的用户级环境变量写入/清除。
+- **入口 UI 集成与配置模板**：`ClaudeGuardLauncher.cs`（`v1.5.0` / `1.5.0.0`）新增「网络优化」交互面板；新增 `configs/vps_optimize.sh`、`xray_no_tun_template.json`、`mihomo_no_tun.yaml`、`singbox_no_tun.json` 与 `browser_isolation_guide.md`。
+
+## v1.4.9 (2026-11-11)
+
+合并 GitHub v1.4.8 的 Desktop 5.x 与哈希读取修复，保留本机生命周期夹具修复和独立迭代历史。上游迭代与本机编号独立，原始台账分别保存。
 
 v1.3.4、v1.3.5、v1.4.0、v1.4.1 于 2026-10-31 按既有成功证据补登记；这些历史部署当时实际显示 v1.3.3。补登记保留完成时间、登记时间及证据哈希，不代表当时曾编译或发布这些追溯分配的版本。
 

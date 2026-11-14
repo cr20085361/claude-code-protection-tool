@@ -1,5 +1,15 @@
 ﻿[CmdletBinding()]
-param([ValidateSet('Start','Check','Login','Update','Diagnose')][string]$Action='Start',[string]$ResultFile,[string]$ActionId)
+param(
+    [ValidateSet('Start','Check','Login','Update','Diagnose','NetworkEnvCheck','NetworkEnvScore','NetworkEnvSetGate','NetworkEnvAutoFix','NetworkEnvEnablePolicy','NetworkEnvRestorePolicy','NetworkEnvLaunchSafeBrowser','NetworkEnvCliEnable','NetworkEnvCliClear','NetworkEnvCliTerminal')][string]$Action='Start',
+    [string]$ResultFile,
+    [string]$ActionId,
+    [string]$TargetUrl='https://ipkk.com/claude-ip-check',
+    [ValidateSet('Auto','Dedicated','Shared')][string]$ProxyMode='Auto',
+    [switch]$CheckConnectivity,
+    [int]$Threshold=-1,
+    [ValidateSet('Unchanged','True','False')][string]$GateEnabled='Unchanged',
+    [switch]$BypassRiskGate
+)
 $ErrorActionPreference='Stop'
 Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard.psm1') -Force
 if($ResultFile){
@@ -7,9 +17,10 @@ if($ResultFile){
     if([IO.Path]::GetDirectoryName($ResultFile) -ne (Get-GuardPath 'private') -or [IO.Path]::GetFileName($ResultFile) -notmatch '^ui-result-[0-9a-f]{32}\.json$'){throw 'Invalid private UI result path.'}
 }
 if(-not $ActionId){$ActionId=[guid]::NewGuid().ToString('N')}
-if($Action -ne 'Diagnose'){Register-GuardUiAction $ActionId $Action}
+$isNetworkEnvAction=$Action -like 'NetworkEnv*'
+if($Action -ne 'Diagnose' -and -not $isNetworkEnvAction){Register-GuardUiAction $ActionId $Action}
 $deadline=[datetime]::UtcNow.AddSeconds(150)
-$result=[ordered]@{Success=$false;Pending=$false;OperationId=$null;Phase=$null;Message='';Started=$false;SessionVerified=$false;DesktopPid=$null;FailureKind=$null;ApprovedVersion=$null;InstalledVersion=$null;SupervisorStatus=$null;SupervisorVerified=$false;SupervisorTime=$null;SupervisorRunId=$null;ApiTransport=$null;ActionId=$ActionId}
+$result=[ordered]@{Success=$false;Pending=$false;OperationId=$null;Phase=$null;Message='';Started=$false;SessionVerified=$false;DesktopPid=$null;FailureKind=$null;ApprovedVersion=$null;InstalledVersion=$null;SupervisorStatus=$null;SupervisorVerified=$false;SupervisorTime=$null;SupervisorRunId=$null;ApiTransport=$null;ActionId=$ActionId;NetworkEnv=$null;RiskScore=$null}
 function Assert-GuardUiRetryWindow($Snapshot,[datetimeoffset]$Now=[datetimeoffset]::UtcNow) {
     # 仅使用已核验身份和时效的快照；不能把旧记录或未知进程当成节点故障。
     if($Snapshot.Ready -or $Snapshot.Kind -notin @('UpstreamUnavailable','Checking')){return}
@@ -36,9 +47,131 @@ function Wait-VersionMaintenance([string]$Id,$Installer=$null) {
     }while($true)
 }
 $createdOperation=$null
+if($isNetworkEnvAction){
+    Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard-NetworkEnv.psm1') -Force
+    try{
+        switch($Action){
+            'NetworkEnvCheck'{
+                $risk=Get-NetworkEnvRiskScore -CheckConnectivity:$CheckConnectivity -ProxyMode $ProxyMode
+                $result.RiskScore=$risk
+                $result.NetworkEnv=$risk.Baseline
+                $result.Message=$risk.Summary+"`r`n`r`n"+$risk.Baseline.SummaryText
+                $result.Success=$true
+            }
+            'NetworkEnvScore'{
+                $risk=Get-NetworkEnvRiskScore -CheckConnectivity:$CheckConnectivity -ProxyMode $ProxyMode
+                $result.RiskScore=$risk
+                $result.Message=$risk.Summary
+                $result.Success=$true
+            }
+            'NetworkEnvSetGate'{
+                $gateVal=switch($GateEnabled){'True'{$true}'False'{$false}default{$null}}
+                $threshVal=if($Threshold -ge 0){$Threshold}else{$null}
+                $null=Set-NetworkEnvRiskConfig -GateEnabled $gateVal -MaxRiskScore $threshVal -ProxyMode $ProxyMode
+                $risk=Get-NetworkEnvRiskScore -CheckConnectivity:$CheckConnectivity -ProxyMode $ProxyMode
+                $result.RiskScore=$risk
+                $result.Message="已更新网络风险门禁配置。`r`n`r`n"+$risk.Summary
+                $result.Success=$true
+            }
+            'NetworkEnvAutoFix'{
+                try{
+                    $sel=Get-NetworkEnvProxySelection -ProxyMode $ProxyMode
+                    $cli=Get-NetworkEnvCliProxyStatus
+                    if(-not $cli.UserEnv.HTTPS_PROXY){$null=Set-NetworkEnvCliProxy -Port $sel.Port -Scope User}
+                }catch{}
+                if(Test-NetworkEnvPolicyRegistryWritable -Browsers @('Chrome','Edge')){
+                    $null=Enable-NetworkEnvBrowserPolicy -Browsers @('Chrome','Edge')
+                }else{
+                    $null=Invoke-NetworkEnvElevatedBrowserPolicy -Mode Enable -Browser All -ShellPath (Get-GuardApprovedShellPath)
+                }
+                $risk=Get-NetworkEnvRiskScore -CheckConnectivity:$CheckConnectivity -ProxyMode $ProxyMode
+                $result.RiskScore=$risk
+                $result.NetworkEnv=$risk.Baseline
+                $result.Message="已完成一键防泄露与代理修复（已自动备份原配置）。请重启已打开的浏览器生效。`r`n`r`n"+$risk.Summary+"`r`n`r`n"+$risk.Baseline.SummaryText
+                $result.Success=$true
+            }
+            'NetworkEnvEnablePolicy'{
+                if(Test-NetworkEnvPolicyRegistryWritable -Browsers @('Chrome','Edge')){
+                    $null=Enable-NetworkEnvBrowserPolicy -Browsers @('Chrome','Edge')
+                }else{
+                    $null=Invoke-NetworkEnvElevatedBrowserPolicy -Mode Enable -Browser All -ShellPath (Get-GuardApprovedShellPath)
+                }
+                $risk=Get-NetworkEnvRiskScore -CheckConnectivity:$CheckConnectivity -ProxyMode $ProxyMode
+                $result.RiskScore=$risk
+                $result.NetworkEnv=$risk.Baseline
+                $result.Message="已写入当前用户级 Chrome/Edge 防 WebRTC 与 DoH 泄露策略（已自动备份）。请重启浏览器使其生效。`r`n`r`n"+$risk.Summary+"`r`n`r`n"+$risk.Baseline.SummaryText
+                $result.Success=$true
+            }
+            'NetworkEnvRestorePolicy'{
+                if(Test-NetworkEnvPolicyRegistryWritable -Browsers @('Chrome','Edge')){
+                    $null=Restore-NetworkEnvBrowserPolicy -Browsers @('Chrome','Edge')
+                }else{
+                    $null=Invoke-NetworkEnvElevatedBrowserPolicy -Mode Restore -Browser All -ShellPath (Get-GuardApprovedShellPath)
+                }
+                $risk=Get-NetworkEnvRiskScore -CheckConnectivity:$CheckConnectivity -ProxyMode $ProxyMode
+                $result.RiskScore=$risk
+                $result.NetworkEnv=$risk.Baseline
+                $result.Message="已还原/清除 Chrome/Edge 防泄露策略。请重启浏览器生效。`r`n`r`n"+$risk.Summary+"`r`n`r`n"+$risk.Baseline.SummaryText
+                $result.Success=$true
+            }
+            'NetworkEnvLaunchSafeBrowser'{
+                $launch=Start-NetworkEnvSafeBrowser -Url $TargetUrl -ProxyMode $ProxyMode
+                $result.NetworkEnv=$launch
+                $result.Message=("已启动安全隔离浏览器 {0} (PID={1})，通道 {2}（UDP转发={3}，防泄露策略={4}）。" -f $launch.Browser,$launch.Pid,$launch.ProxyUrl,$launch.UdpAssociateSupported,$launch.PolicyProtected)
+                $result.Success=$true
+            }
+            'NetworkEnvCliEnable'{
+                $sel=Get-NetworkEnvProxySelection -ProxyMode $ProxyMode
+                $null=Set-NetworkEnvCliProxy -Port $sel.Port -Scope User
+                $risk=Get-NetworkEnvRiskScore -ProxyMode $ProxyMode
+                $result.RiskScore=$risk
+                $result.NetworkEnv=$risk.Baseline
+                $result.Message=("已写入用户级 CLI 代理环境变量 (127.0.0.1:{0})，已备份原值。新开终端即可直接运行 claude / codex。`r`n`r`n" -f $sel.Port)+$risk.Summary+"`r`n`r`n"+$risk.Baseline.SummaryText
+                $result.Success=$true
+            }
+            'NetworkEnvCliClear'{
+                $null=Set-NetworkEnvCliProxy -Scope ClearUser
+                $risk=Get-NetworkEnvRiskScore -ProxyMode $ProxyMode
+                $result.RiskScore=$risk
+                $result.NetworkEnv=$risk.Baseline
+                $result.Message="已清除/还原用户级 CLI 代理环境变量。新开终端生效。`r`n`r`n"+$risk.Summary+"`r`n`r`n"+$risk.Baseline.SummaryText
+                $result.Success=$true
+            }
+            'NetworkEnvCliTerminal'{
+                $sel=Get-NetworkEnvProxySelection -ProxyMode $ProxyMode
+                $shellExe=Get-GuardApprovedShellPath
+                $map=New-NetworkEnvCliEnvMap -Port $sel.Port
+                $psi=[Diagnostics.ProcessStartInfo]::new($shellExe)
+                $psi.UseShellExecute=$false
+                $psi.WorkingDirectory=$PSScriptRoot
+                foreach($kv in $map.GetEnumerator()){$psi.Environment[$kv.Key]=$kv.Value}
+                $psi.ArgumentList.Add('-NoExit')
+                $psi.ArgumentList.Add('-NoProfile')
+                $psi.ArgumentList.Add('-Command')
+                $psi.ArgumentList.Add("Write-Host '已注入非 TUN 代理环境 127.0.0.1:$($sel.Port) (适合直接运行 claude / codex)。' -ForegroundColor Green")
+                $term=[Diagnostics.Process]::Start($psi)
+                $result.NetworkEnv=[pscustomobject]@{Pid=$term.Id;Port=$sel.Port}
+                $result.Message=("已打开代理终端窗口 (PID={0}, 127.0.0.1:{1})，可直接输入 claude 或 codex 使用。" -f $term.Id,$sel.Port)
+                $result.Success=$true
+            }
+        }
+    }catch{
+        $result.Success=$false
+        $errMsg=$_.Exception.Message
+        if($errMsg -match '^AdministratorCancelled:\s*(.+)$'){
+            $result.FailureKind='AdministratorCancelled'
+            $result.Message=$Matches[1]
+        }else{
+            $result.Message='网络优化操作失败：'+$errMsg
+        }
+    }
+    if($ResultFile){Write-GuardJson $ResultFile $result}else{$result|ConvertTo-Json -Depth 12 -Compress}
+    if(-not $result.Success){exit 1}
+    exit 0
+}
 if($Action -eq 'Diagnose'){
     try{$result.ApiTransport=Test-GuardApiTransport;$result.Success=$true}catch{$result.Message='官方 API 无账号诊断暂未完成。'}
-    if($ResultFile){Write-GuardJson $ResultFile $result}else{$result|ConvertTo-Json -Compress}
+    if($ResultFile){Write-GuardJson $ResultFile $result}else{$result|ConvertTo-Json -Depth 12 -Compress}
     exit 0
 }
 try {
@@ -97,7 +230,7 @@ try {
         $result.ActionId=$ActionId
     } elseif($Action -eq 'Start') {
         $m=Get-GuardMaintenanceSnapshot;if($m.Active -or $m.Interrupted -or ($m.Operation -and $m.Operation.RecoveryRequired)){throw 'MaintenanceInterrupted: 维护尚未结束，请先接续维护。'}
-        if($existing.Count) {
+        Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard-NetworkEnv.psm1') -Force; $riskGate=Get-NetworkEnvRiskScore -ProxyMode $ProxyMode; $result.RiskScore=$riskGate; if(-not $BypassRiskGate -and -not $riskGate.PassedGate){$null=Assert-NetworkEnvRiskGate -Baseline $riskGate.Baseline -ProxyMode $ProxyMode}; if($existing.Count) {
             Assert-GuardPolicy
             Assert-GuardFirewall
             Start-GuardProxy -DeadlineUtc $deadline
@@ -136,7 +269,7 @@ try {
             if(@($existing|Where-Object ProcessId -eq $last.Pid).Count -ne 1 -or (Get-Process -Id $last.Pid).StartTime.ToUniversalTime().Ticks -ne ([datetime]$last.ProcessStart).ToUniversalTime().Ticks){throw 'Claude is already running outside the protected launcher.'}
             Assert-GuardDesktopNetwork $last.Pid -DeadlineUtc $deadline
         }
-        $result.Message=if($result.SessionVerified){'固定出口及防护检查通过；当前版本的本机本地 Code 基础使用已验收。'}else{'固定出口、代理、防火墙和新版本执行门槛检查通过。真实 Code 会话验收状态请查看报告。'}
+        Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard-NetworkEnv.psm1') -Force; try{$result.RiskScore=Get-NetworkEnvRiskScore -ProxyMode $ProxyMode}catch{}; $result.Message=if($result.SessionVerified){'固定出口及防护检查通过；当前版本的本机本地 Code 基础使用已验收。'}else{'固定出口、代理、防火墙和新版本执行门槛检查通过。真实 Code 会话验收状态请查看报告。'}
     }
     if($Action -ne 'Update'){
         $snapshot=Get-GuardSupervisorSnapshot
@@ -166,6 +299,7 @@ try {
     elseif($detail -match 'updated|changed|metadata|binary'){ $result.Message='软件或防护配置发生变化，已停止启动。请重新核验并补齐规则后使用。' }
     elseif($detail -match 'runtime coverage|not prepared'){ $result.Message='首次配置尚未完成，已停止启动。请先完成引擎和防火墙配置。' }
     elseif($detail -match 'Desktop.*proxy|Desktop.*network'){ $result.FailureKind='DesktopProxyUnverified';$result.Message='未能确认 Claude 使用专用连接，已停止本次启动。请重新检查后重试。' }
+    elseif($detail -match '^NetworkRiskGateBlocked: '){ $result.FailureKind='NetworkRiskBlocked';$result.Message=$detail.Substring('NetworkRiskGateBlocked: '.Length) }
     elseif($detail -match 'Neutral egress|egress mismatch'){ $result.FailureKind='UpstreamUnavailable';$result.Message='固定节点出口探测失败。守护正在有限重试；恢复后点击“重新检查”。' }
     elseif($detail -match 'proxy|Proxy|interface|VPS'){ $result.FailureKind='DedicatedProxyUnavailable';$result.Message='专用代理或绑定网卡不可用，已停止启动。请查看说明中的故障记录。' }
     elseif($detail -match '^AdministratorCancelled:'){ $result.FailureKind='AdministratorCancelled';$result.Message='Windows 管理员授权已取消，版本维护未执行。请点击“维护版本”重试。' }
@@ -189,5 +323,5 @@ if($claim.ActionId -eq $ActionId -and (-not $active -or -not $result.OperationId
 if($ResultFile){
     Write-GuardJson ($ResultFile+'.tmp') $result
     [IO.File]::Move(($ResultFile+'.tmp'),$ResultFile,$true)
-}else{$result|ConvertTo-Json -Compress}
+}else{$result|ConvertTo-Json -Depth 12 -Compress}
 if(-not $result.Success -and -not $result.Pending){exit 1}

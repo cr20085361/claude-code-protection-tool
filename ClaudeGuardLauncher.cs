@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.Threading;
 using System.Text;
@@ -9,11 +10,21 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
-[assembly: System.Reflection.AssemblyVersion("1.4.8.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.4.8.0")]
+[assembly: System.Reflection.AssemblyVersion("1.6.1.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.6.1.0")]
 
 public sealed class ClaudeGuardWindow : Form {
-    public const string BuildVersion="v1.4.8";
+    public const string BuildVersion="v1.6.1";
+    static readonly Color CanvasBg=Color.FromArgb(244,246,249);
+    static readonly Color CardBg=Color.White;
+    static readonly Color CardBorder=Color.FromArgb(226,232,240);
+    static readonly Color TextPrimary=Color.FromArgb(15,23,42);
+    static readonly Color TextSecondary=Color.FromArgb(71,85,105);
+    static readonly Color TextMuted=Color.FromArgb(100,116,139);
+    static readonly Color BrandTeal=Color.FromArgb(15,118,110);
+    static readonly Color BrandIndigo=Color.FromArgb(37,99,235);
+    static readonly Color NeutralBtnBg=Color.FromArgb(248,250,252);
+    static readonly Color NeutralBtnBorder=Color.FromArgb(203,213,225);
     static string ReadSharedText(string path) {
         var retry=Stopwatch.StartNew();
         while(true) {
@@ -43,6 +54,14 @@ public sealed class ClaudeGuardWindow : Form {
     readonly Button downloadUpdates = new Button();
     readonly Button installUpdates = new Button();
     readonly Label downloadStatus = new Label();
+    readonly Button networkEnvButton = new Button();
+    readonly Label riskBadgeLabel = new Label();
+    readonly Label riskSummaryLabel = new Label();
+    readonly CheckBox gateToggle = new CheckBox();
+    readonly NumericUpDown thresholdInput = new NumericUpDown();
+    readonly Button quickFixButton = new Button();
+    readonly Button refreshScoreButton = new Button();
+    bool suppressGateEvents;
     bool updateDispatchBusy;
     bool officialDownloadReady;
     string installedDesktopVersion;
@@ -69,31 +88,127 @@ public sealed class ClaudeGuardWindow : Form {
         get { return maintenanceViewOnly; }
         set { maintenanceViewOnly=value; Text="Claude Pro · "+(value?"版本维护 ":"安全入口 ")+BuildVersion; }
     }
+    static GraphicsPath CreateRoundRectPath(Rectangle rect, int radius) {
+        var path = new GraphicsPath();
+        int d = Math.Max(2, radius * 2);
+        if (d > rect.Width) d = rect.Width;
+        if (d > rect.Height) d = rect.Height;
+        path.AddArc(rect.X, rect.Y, d, d, 180, 90);
+        path.AddArc(rect.Right - d, rect.Y, d, d, 270, 90);
+        path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
+        path.AddArc(rect.X, rect.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+    static void DrawCard(Graphics g, Rectangle rect, Color accentTop) {
+        if (rect.Width < 20 || rect.Height < 20) return;
+        int r = Math.Max(6, Math.Min(12, rect.Height / 10));
+        using (var path = CreateRoundRectPath(rect, r))
+        using (var fill = new SolidBrush(CardBg))
+        using (var border = new Pen(CardBorder, 1f)) {
+            g.FillPath(fill, path);
+            if (!accentTop.IsEmpty) {
+                var clipState = g.Save();
+                g.SetClip(path);
+                using (var bar = new SolidBrush(accentTop)) {
+                    g.FillRectangle(bar, rect.X, rect.Y, rect.Width, 3);
+                }
+                g.Restore(clipState);
+            }
+            g.DrawPath(border, path);
+        }
+    }
+    static void StylePrimaryButton(Button b, Color bg) {
+        b.FlatStyle = FlatStyle.Flat;
+        b.BackColor = bg;
+        b.ForeColor = Color.White;
+        b.FlatAppearance.BorderSize = 0;
+        b.FlatAppearance.MouseOverBackColor = Color.FromArgb(Math.Max(0, bg.R - 12), Math.Max(0, bg.G - 12), Math.Max(0, bg.B - 12));
+        b.Cursor = Cursors.Hand;
+    }
+    static void StyleSecondaryButton(Button b) {
+        b.FlatStyle = FlatStyle.Flat;
+        b.BackColor = NeutralBtnBg;
+        b.ForeColor = TextPrimary;
+        b.FlatAppearance.BorderSize = 1;
+        b.FlatAppearance.BorderColor = NeutralBtnBorder;
+        b.FlatAppearance.MouseOverBackColor = Color.FromArgb(241, 245, 249);
+        b.Cursor = Cursors.Hand;
+    }
+    static void StyleAccentOutlineButton(Button b, Color accent) {
+        b.FlatStyle = FlatStyle.Flat;
+        b.BackColor = Color.FromArgb(239, 246, 255);
+        b.ForeColor = accent;
+        b.FlatAppearance.BorderSize = 1;
+        b.FlatAppearance.BorderColor = Color.FromArgb(191, 219, 254);
+        b.FlatAppearance.MouseOverBackColor = Color.FromArgb(219, 234, 254);
+        b.Cursor = Cursors.Hand;
+    }
+    protected override void OnPaint(PaintEventArgs e) {
+        base.OnPaint(e);
+        var g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        int marginX = Math.Max(16, status.Left - 18);
+        int cardW = Math.Max(200, ClientSize.Width - marginX * 2);
+        int padY = Math.Max(10, (launch.Top - status.Bottom) + 6);
+        // Card 1: Guard & Launch (encloses status..networkHealth directly owned by Form)
+        int c1Top = Math.Max(4, status.Top - 16);
+        int c1Bottom = Math.Max(c1Top + 40, networkHealth.Bottom + 14);
+        DrawCard(g, new Rectangle(marginX, c1Top, cardW, c1Bottom - c1Top), status.ForeColor);
+        // Card 2: Desktop & Code versions / updates
+        int c2Top = Math.Max(c1Bottom + 8, installedVersions.Top - 12);
+        int c2Bottom = Math.Max(c2Top + 40, entryVersion.Bottom + 12);
+        DrawCard(g, new Rectangle(marginX, c2Top, cardW, c2Bottom - c2Top), Color.Empty);
+        // Card 3: Network Risk Gate & Optimization
+        int c3Top = Math.Max(c2Bottom + 8, riskSummaryLabel.Top - 12);
+        int c3Bottom = Math.Max(c3Top + 40, networkEnvButton.Bottom + 12);
+        DrawCard(g, new Rectangle(marginX, c3Top, cardW, c3Bottom - c3Top), BrandIndigo);
+    }
     public ClaudeGuardWindow(string projectRoot, string pwsh) {
         root=projectRoot; shell=pwsh;
-        Text="Claude Pro · 安全入口 "+BuildVersion; ClientSize=new Size(660,498);
-        AutoScroll=true;AutoScrollMinSize=new Size(640,490);
+        SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
+        Text="Claude Pro · 安全入口 "+BuildVersion; ClientSize=new Size(700,616);
+        AutoScroll=true;AutoScrollMinSize=new Size(680,600);
         FormBorderStyle=FormBorderStyle.FixedDialog; MaximizeBox=false; StartPosition=FormStartPosition.CenterScreen;
-        Font=new Font("Microsoft YaHei UI",10); BackColor=Color.FromArgb(247,249,252);
-        var title=new Label { Text="Claude Pro", Font=new Font("Microsoft YaHei UI",19,FontStyle.Bold), Location=new Point(24,20), AutoSize=true };
-        toolBuildVersion.Text="安全入口 "+BuildVersion;toolBuildVersion.SetBounds(310,31,324,26);
-        toolBuildVersion.TextAlign=ContentAlignment.MiddleRight;toolBuildVersion.ForeColor=Color.FromArgb(70,79,91);
-        var hint=new Label { Text="双击入口后，自动检查连接并打开 Claude。",Location=new Point(26,64),AutoSize=true,ForeColor=Color.FromArgb(70,79,91) };
-        status.SetBounds(26,100,608,80); status.Text="正在检查专用网络和防护配置……";
-        launch.Text="打开 Claude"; launch.SetBounds(26,188,120,38);
-        check.Text="重新检查"; check.SetBounds(156,188,110,38);
-        login.Text="登录链接";login.SetBounds(276,188,110,38);
-        report.Text="查看说明"; report.SetBounds(396,188,112,38);
-        maintenance.Text="维护版本";maintenance.SetBounds(518,188,112,38);
+        Font=new Font("Microsoft YaHei UI",9.5f); BackColor=CanvasBg; ForeColor=TextPrimary;
+        var title=new Label { Text="Claude Pro", Font=new Font("Microsoft YaHei UI",18,FontStyle.Bold), Location=new Point(26,18), AutoSize=true, BackColor=CanvasBg, ForeColor=TextPrimary };
+        var hint=new Label { Text="固定节点守护与非 TUN 网络风险门禁 · 双击安全检查后启动",Location=new Point(28,53),AutoSize=true,Font=new Font("Microsoft YaHei UI",8.75f),ForeColor=TextMuted,BackColor=CanvasBg };
+        riskBadgeLabel.Text="风险评分 -- · 门限 ≤ 20";riskBadgeLabel.SetBounds(376,22,184,26);
+        riskBadgeLabel.Font=new Font("Microsoft YaHei UI",8.5f,FontStyle.Bold);
+        riskBadgeLabel.TextAlign=ContentAlignment.MiddleCenter;
+        riskBadgeLabel.BackColor=Color.FromArgb(241,245,249);riskBadgeLabel.ForeColor=TextSecondary;
+        riskBadgeLabel.Cursor=Cursors.Hand;
+        riskBadgeLabel.Click+=delegate { ShowNetworkEnvDialog(); };
+        toolBuildVersion.Text="安全入口 "+BuildVersion;toolBuildVersion.SetBounds(568,22,108,26);
+        toolBuildVersion.Font=new Font("Microsoft YaHei UI",8.5f,FontStyle.Bold);
+        toolBuildVersion.TextAlign=ContentAlignment.MiddleCenter;
+        toolBuildVersion.BackColor=Color.FromArgb(226,232,240);toolBuildVersion.ForeColor=TextPrimary;
+
+        status.SetBounds(42,100,616,74); status.Text="正在检查专用网络、风险评分和防护配置……";
+        status.Font=new Font("Microsoft YaHei UI",10f); status.BackColor=CardBg; status.ForeColor=TextPrimary;
+        status.TextChanged+=delegate { Invalidate(); };
+        status.ForeColorChanged+=delegate { Invalidate(); };
+
+        launch.Text="打开 Claude"; launch.SetBounds(42,186,134,36); launch.Font=new Font("Microsoft YaHei UI",9.5f,FontStyle.Bold);
+        check.Text="重新检查"; check.SetBounds(186,186,108,36);
+        login.Text="登录链接";login.SetBounds(304,186,108,36);
+        report.Text="查看说明"; report.SetBounds(422,186,108,36);
+        maintenance.Text="维护版本";maintenance.SetBounds(540,186,118,36);
+        StylePrimaryButton(launch, BrandTeal);
+        StyleSecondaryButton(check);
+        StyleSecondaryButton(login);
+        StyleSecondaryButton(report);
+        StyleSecondaryButton(maintenance);
         launch.Click+=async delegate { await RunAction("Start"); };
         check.Click+=async delegate { await RunAction("Check"); };
         maintenance.Click+=async delegate { await RunAction("Update"); };
         report.Click+=delegate { Process.Start(new ProcessStartInfo(Path.Combine(root,"一键使用说明.txt")){UseShellExecute=true}); };
         login.Click+=async delegate {
-            using(var prompt=new Form {Text="专用登录浏览器",ClientSize=new Size(488,150),StartPosition=FormStartPosition.CenterParent,FormBorderStyle=FormBorderStyle.FixedDialog,MaximizeBox=false,MinimizeBox=false}){
-                var label=new Label{Text="粘贴 Claude 提供的官方登录链接或邮件登录链接：",AutoSize=true,Location=new Point(16,18)};
+            using(var prompt=new Form {Text="专用登录浏览器",ClientSize=new Size(488,150),StartPosition=FormStartPosition.CenterParent,FormBorderStyle=FormBorderStyle.FixedDialog,MaximizeBox=false,MinimizeBox=false,BackColor=CanvasBg,Font=new Font("Microsoft YaHei UI",9.5f)}){
+                var label=new Label{Text="粘贴 Claude 提供的官方登录链接或邮件登录链接：",AutoSize=true,Location=new Point(16,18),BackColor=CanvasBg};
                 var input=new TextBox{Location=new Point(16,50),Width=452};
-                var open=new Button{Text="打开专用浏览器",Location=new Point(310,95),Width=158,DialogResult=DialogResult.OK};
+                var open=new Button{Text="打开专用浏览器",Location=new Point(310,95),Width=158,Height=34,DialogResult=DialogResult.OK};
+                StylePrimaryButton(open, BrandTeal);
                 prompt.Controls.AddRange(new Control[]{label,input,open});prompt.AcceptButton=open;
                 if(prompt.ShowDialog(this)==DialogResult.OK){
                     File.WriteAllText(Path.Combine(root,"private","login-link.json"),json.Serialize(new {Url=input.Text.Trim()}));
@@ -101,28 +216,42 @@ public sealed class ClaudeGuardWindow : Form {
                 }
             }
         };
-        var footer=new Label {Text="专用节点由后台持续检查；节点池自动选择可用连接。",Location=new Point(26,242),AutoSize=true,ForeColor=Color.FromArgb(70,79,91)};
-        networkHealth.SetBounds(26,266,608,24); networkHealth.Font=new Font("Microsoft YaHei UI",9);networkHealth.Text="后台守护状态待确认。";
-        Controls.AddRange(new Control[]{title,toolBuildVersion,hint,status,launch,check,login,report,maintenance,footer,networkHealth});
-        var divider=new Label{BackColor=Color.FromArgb(219,225,231),Location=new Point(26,300),Size=new Size(608,1)};
-        installedVersions.SetBounds(26,312,608,23);installedVersions.Text="正在读取 Desktop 和配套 Code 版本……";installedVersions.AutoEllipsis=true;
-        runtimeVersions.SetBounds(26,338,608,23);runtimeVersions.Text="本地 Code：运行版本待确认。";runtimeVersions.AutoEllipsis=true;
-        updateStatus.SetBounds(26,370,480,46);updateStatus.Font=new Font("Microsoft YaHei UI",9);updateStatus.Text="官方版本尚未检查。";
-        checkUpdates.SetBounds(518,370,112,38);checkUpdates.Text="检查新版";
+        var footer=new Label {Text="专用节点由后台持续检查；节点池自动选择可用连接。",Location=new Point(42,236),AutoSize=true,Font=new Font("Microsoft YaHei UI",8.5f),ForeColor=TextMuted,BackColor=CardBg};
+        networkHealth.SetBounds(42,258,616,22); networkHealth.Font=new Font("Microsoft YaHei UI",9f);networkHealth.Text="后台守护状态待确认。";networkHealth.BackColor=CardBg;
+        Controls.AddRange(new Control[]{title,hint,riskBadgeLabel,toolBuildVersion,status,launch,check,login,report,maintenance,footer,networkHealth});
+
+        installedVersions.SetBounds(42,320,616,22);installedVersions.Text="正在读取 Desktop 和配套 Code 版本……";installedVersions.AutoEllipsis=true;installedVersions.BackColor=CardBg;
+        runtimeVersions.SetBounds(42,346,616,22);runtimeVersions.Text="本地 Code：运行版本待确认。";runtimeVersions.AutoEllipsis=true;runtimeVersions.BackColor=CardBg;
+        updateStatus.SetBounds(42,378,486,38);updateStatus.Font=new Font("Microsoft YaHei UI",9f);updateStatus.Text="官方版本尚未检查。";updateStatus.BackColor=CardBg;
+        checkUpdates.SetBounds(540,378,118,34);checkUpdates.Text="检查新版";StyleSecondaryButton(checkUpdates);
         checkUpdates.Click+=async delegate {await RefreshVersionInfo(true,true);};
-        downloadStatus.SetBounds(26,418,352,46);downloadStatus.Font=new Font("Microsoft YaHei UI",9);downloadStatus.Text="尚未下载官方安装包。";
-        downloadUpdates.SetBounds(390,420,116,38);downloadUpdates.Text="下载官方包";downloadUpdates.Enabled=false;
-        installUpdates.SetBounds(518,420,112,38);installUpdates.Text="安装并维护";installUpdates.Enabled=false;
+        downloadStatus.SetBounds(42,424,366,38);downloadStatus.Font=new Font("Microsoft YaHei UI",9f);downloadStatus.Text="尚未下载官方安装包。";downloadStatus.BackColor=CardBg;
+        downloadUpdates.SetBounds(420,424,110,34);downloadUpdates.Text="下载官方包";downloadUpdates.Enabled=false;StyleSecondaryButton(downloadUpdates);
+        installUpdates.SetBounds(540,424,118,34);installUpdates.Text="安装并维护";installUpdates.Enabled=false;StyleAccentOutlineButton(installUpdates, BrandIndigo);
         downloadUpdates.Click+=async delegate {await RunDesktopUpdate("Download");};
         installUpdates.Click+=async delegate {await RunDesktopUpdate("Install");};
-        entryVersion.SetBounds(26,468,608,22);entryVersion.Font=new Font("Microsoft YaHei UI",8);entryVersion.ForeColor=Color.FromArgb(90,99,110);
+        entryVersion.SetBounds(42,466,616,18);entryVersion.Font=new Font("Microsoft YaHei UI",8f);entryVersion.ForeColor=TextMuted;entryVersion.BackColor=CardBg;
         entryVersion.Text="入口运行时每 6 小时检查新版，由你决定何时更新。";
-        Controls.AddRange(new Control[]{divider,installedVersions,runtimeVersions,updateStatus,checkUpdates,downloadStatus,downloadUpdates,installUpdates,entryVersion});
+
+        riskSummaryLabel.SetBounds(42,514,616,24);riskSummaryLabel.Font=new Font("Microsoft YaHei UI",9f,FontStyle.Bold);riskSummaryLabel.ForeColor=TextPrimary;riskSummaryLabel.BackColor=CardBg;riskSummaryLabel.AutoEllipsis=true;
+        riskSummaryLabel.Text="非 TUN 网络风险门禁：等待首次检测（低于门限方可启动 Claude）。";
+        gateToggle.Text="启用门限 ≤";gateToggle.Location=new Point(42,553);gateToggle.AutoSize=true;gateToggle.Checked=true;gateToggle.BackColor=CardBg;gateToggle.ForeColor=TextSecondary;
+        thresholdInput.SetBounds(138,550,58,25);thresholdInput.Minimum=0;thresholdInput.Maximum=100;thresholdInput.Value=20;
+        quickFixButton.SetBounds(210,548,124,32);quickFixButton.Text="一键防泄露修复";StylePrimaryButton(quickFixButton, Color.FromArgb(22,163,74));
+        refreshScoreButton.SetBounds(344,548,96,32);refreshScoreButton.Text="重测评分";StyleSecondaryButton(refreshScoreButton);
+        networkEnvButton.SetBounds(540,548,118,32);networkEnvButton.Text="网络优化";StyleAccentOutlineButton(networkEnvButton, BrandIndigo);
+        gateToggle.CheckedChanged+=async delegate { if(!suppressGateEvents && !PreviewOnly) await SaveRiskGateConfigAsync(); };
+        thresholdInput.ValueChanged+=async delegate { if(!suppressGateEvents && !PreviewOnly) await SaveRiskGateConfigAsync(); };
+        quickFixButton.Click+=async delegate { await RunQuickNetworkFixAsync(); };
+        refreshScoreButton.Click+=async delegate { await RefreshRiskScoreAsync(false); };
+        networkEnvButton.Click+=delegate { ShowNetworkEnvDialog(); };
+
+        Controls.AddRange(new Control[]{installedVersions,runtimeVersions,updateStatus,checkUpdates,downloadStatus,downloadUpdates,installUpdates,entryVersion,riskSummaryLabel,gateToggle,thresholdInput,quickFixButton,refreshScoreButton,networkEnvButton});
         healthTimer.Interval=2000;healthTimer.Tick+=delegate { RefreshClientState();RefreshNetworkHealth();RefreshDesktopUpdate(); };healthTimer.Start();
         versionTimer.Interval=10000;versionTimer.Tick+=async delegate {if(!PreviewOnly)await RefreshVersionInfo(false,DateTimeOffset.UtcNow>=nextCatalogCheck);};versionTimer.Start();
         FormClosed+=delegate {healthTimer.Stop();healthTimer.Dispose();versionTimer.Stop();versionTimer.Dispose();};
         var iconPath=Path.Combine(root,"runtime","claude-guard.ico"); if(File.Exists(iconPath)) Icon=new Icon(iconPath);
-        Shown+=async delegate { if(!PreviewOnly) {var versions=RefreshVersionInfo(false,true);if(ResumeMaintenanceOnOpen() || ResumeDesktopUpdateOnOpen())RefreshNetworkHealth();else if(StatusViewOnly){guardWarning=true;RefreshNetworkHealth();}else if(MaintenanceViewOnly){status.Text="请完全退出 Claude 和本地 Code 后，点击“维护版本”。";RefreshNetworkHealth();}else await RunAction("Start");await versions;} };
+        Shown+=async delegate { if(!PreviewOnly) {var versions=RefreshVersionInfo(false,true);var scoreTask=RefreshRiskScoreAsync(false);if(ResumeMaintenanceOnOpen() || ResumeDesktopUpdateOnOpen())RefreshNetworkHealth();else if(StatusViewOnly){guardWarning=true;RefreshNetworkHealth();}else if(MaintenanceViewOnly){status.Text="请完全退出 Claude 和本地 Code 后，点击“维护版本”。";RefreshNetworkHealth();}else await RunAction("Start");await versions;await scoreTask;} };
     }
     public void RenderVersionInfo(VersionResult info) {
         if(info==null || info.SchemaVersion!=1)throw new InvalidDataException("版本观察记录无效。");
@@ -454,6 +583,8 @@ public sealed class ClaudeGuardWindow : Form {
             if(result.OperationId!=null)observedMaintenanceId=result.OperationId;
             status.Text=result.Message;
             status.ForeColor=result.Success?Color.FromArgb(24,106,65):(result.Pending?Color.FromArgb(145,99,20):Color.FromArgb(163,59,42));
+            if(result.RiskScore!=null)ApplyRiskScoreView(result.RiskScore);
+            if(result.FailureKind=="NetworkRiskBlocked")status.Text=result.Message+"\n请点击下方“一键防泄露修复”或调高门限后再次打开。";
             if(result.Success) {lastSuccessMessage=result.Message;RunApiDiagnostic(actionId);}
             RefreshClientState();
         } catch { status.Text="安全检查未能完成，暂时无法确认启动状态。\n请查看说明后重新检查。";status.ForeColor=Color.FromArgb(163,59,42); }
@@ -473,7 +604,274 @@ public sealed class ClaudeGuardWindow : Form {
             }
         } catch {}
     }
-    public class UiResult {public bool Pending {get;set;}public string OperationId {get;set;} public bool Success {get;set;} public string Message {get;set;} public bool SessionVerified {get;set;} public bool SupervisorVerified {get;set;} public string ActionId {get;set;} public ApiResult ApiTransport {get;set;} }
+    void ApplyRiskScoreView(RiskScoreResult risk) {
+        if(risk==null || IsDisposed)return;
+        suppressGateEvents=true;
+        try {
+            gateToggle.Checked=risk.GateEnabled;
+            int t=Math.Max(0,Math.Min(100,risk.Threshold));
+            if((int)thresholdInput.Value!=t)thresholdInput.Value=t;
+            thresholdInput.Enabled=risk.GateEnabled;
+        } finally { suppressGateEvents=false; }
+        string gateDesc=risk.GateEnabled?("门限 ≤ "+risk.Threshold):"门禁关";
+        riskBadgeLabel.Text=String.Format("风险 {0} · {1} | {2}",risk.Score,risk.Grade??"--",gateDesc);
+        if(!risk.GateEnabled) {
+            riskBadgeLabel.BackColor=Color.FromArgb(241,245,249);
+            riskBadgeLabel.ForeColor=TextSecondary;
+        } else if(risk.PassedGate) {
+            riskBadgeLabel.BackColor=Color.FromArgb(220,252,231);
+            riskBadgeLabel.ForeColor=Color.FromArgb(24,106,65);
+        } else {
+            riskBadgeLabel.BackColor=Color.FromArgb(254,226,226);
+            riskBadgeLabel.ForeColor=Color.FromArgb(163,59,42);
+        }
+        string topDesc=(risk.TopRisks!=null && risk.TopRisks.Length>0)?(" | 扣分: "+String.Join("、",risk.TopRisks)):"";
+        riskSummaryLabel.Text=String.Format("非 TUN 风险分: {0} / 100 ({1} 级) · {2}{3}",risk.Score,risk.Grade??"--",risk.GateEnabled?(risk.PassedGate?"允许启动":"超出门限 "+risk.Threshold+"，已拦截启动"):"门禁关闭",topDesc);
+        riskSummaryLabel.ForeColor=(!risk.GateEnabled || risk.PassedGate)?(risk.Score<=8?Color.FromArgb(24,106,65):TextPrimary):Color.FromArgb(163,59,42);
+        Invalidate();
+    }
+    async Task RefreshRiskScoreAsync(bool checkConnectivity) {
+        try {
+            refreshScoreButton.Enabled=false;
+            var res=await RunNetworkEnvBridge("NetworkEnvScore","Auto",null,checkConnectivity,-1,null);
+            if(!IsDisposed && res!=null && res.RiskScore!=null)ApplyRiskScoreView(res.RiskScore);
+        } catch {} finally { if(!IsDisposed)refreshScoreButton.Enabled=true; }
+    }
+    async Task SaveRiskGateConfigAsync() {
+        try {
+            var res=await RunNetworkEnvBridge("NetworkEnvSetGate","Auto",null,false,(int)thresholdInput.Value,gateToggle.Checked);
+            if(!IsDisposed && res!=null && res.RiskScore!=null)ApplyRiskScoreView(res.RiskScore);
+        } catch {}
+    }
+    async Task RunQuickNetworkFixAsync() {
+        quickFixButton.Enabled=false;refreshScoreButton.Enabled=false;
+        try {
+            var res=await RunNetworkEnvBridge("NetworkEnvAutoFix","Auto",null,false,-1,null);
+            if(IsDisposed)return;
+            if(res!=null) {
+                if(res.RiskScore!=null)ApplyRiskScoreView(res.RiskScore);
+                if(!res.Success && !actionBusy) {
+                    status.Text=String.IsNullOrEmpty(res.Message)?"一键防泄露修复未完成，请点击“网络优化”查看详情。":res.Message;
+                    status.ForeColor=res.FailureKind=="AdministratorCancelled"?Color.FromArgb(145,99,20):Color.FromArgb(163,59,42);
+                } else if(res.RiskScore!=null && res.RiskScore.PassedGate && !actionBusy) {
+                    status.Text="已完成一键防泄露修复，当前风险评分 "+res.RiskScore.Score+" / 100 ("+res.RiskScore.Grade+" 级)，已低于门限 "+res.RiskScore.Threshold+"。\n请重启已打开的浏览器；现在可点击“打开 Claude”。";
+                    status.ForeColor=Color.FromArgb(24,106,65);
+                } else if(res.RiskScore!=null && !res.RiskScore.PassedGate && !actionBusy) {
+                    status.Text="已写入防泄露策略，当前风险分 "+res.RiskScore.Score+" / 100 仍高于门限 "+res.RiskScore.Threshold+"，请点“网络优化”查看其余风险项。";
+                    status.ForeColor=Color.FromArgb(145,99,20);
+                }
+            }
+        } catch {} finally { if(!IsDisposed){quickFixButton.Enabled=true;refreshScoreButton.Enabled=true;} }
+    }
+    async Task<UiResult> RunNetworkEnvBridge(string action, string proxyMode, string targetUrl, bool checkConnectivity, int threshold, bool? gateEnabled) {
+        return await Task.Run(delegate {
+            string file = Path.Combine(root, "private", "ui-result-" + Guid.NewGuid().ToString("N") + ".json");
+            try {
+                var sb = new StringBuilder();
+                sb.Append("-NoProfile -ExecutionPolicy Bypass -File \"").Append(Path.Combine(root, "ClaudeGuard-UiBridge.ps1")).Append("\"");
+                sb.Append(" -Action ").Append(action);
+                sb.Append(" -ActionId ").Append(Guid.NewGuid().ToString("N"));
+                sb.Append(" -ResultFile \"").Append(file).Append("\"");
+                if (!String.IsNullOrEmpty(proxyMode)) sb.Append(" -ProxyMode ").Append(proxyMode);
+                if (!String.IsNullOrEmpty(targetUrl)) sb.Append(" -TargetUrl \"").Append(targetUrl.Replace("\"", "")).Append("\"");
+                if (checkConnectivity) sb.Append(" -CheckConnectivity");
+                if (threshold >= 0) sb.Append(" -Threshold ").Append(threshold);
+                if (gateEnabled.HasValue) sb.Append(" -GateEnabled ").Append(gateEnabled.Value ? "True" : "False");
+                var psi = new ProcessStartInfo(shell) {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WorkingDirectory = root,
+                    Arguments = sb.ToString()
+                };
+                using (var p = Process.Start(psi)) {
+                    if (!p.WaitForExit(120000)) {
+                        if (!p.HasExited) p.Kill();
+                        return new UiResult { Success = false, Message = "网络环境操作超时，请稍后重试。" };
+                    }
+                    if (!File.Exists(file)) return new UiResult { Success = false, Message = "未取得网络环境检查结果。" };
+                    return new JavaScriptSerializer().Deserialize<UiResult>(ReadSharedText(file));
+                }
+            } finally {
+                if (File.Exists(file)) File.Delete(file);
+            }
+        });
+    }
+    void ShowNetworkEnvDialog() {
+        using (var dlg = new Form {
+            Text = "非 TUN 网络环境评分与优化 · " + BuildVersion,
+            ClientSize = new Size(808, 560),
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+            Font = new Font("Microsoft YaHei UI", 9.5f),
+            BackColor = CanvasBg,
+            ForeColor = TextPrimary
+        }) {
+            var scoreCard = new Panel {
+                Location = new Point(18, 16),
+                Size = new Size(772, 92),
+                BackColor = CardBg,
+                BorderStyle = BorderStyle.FixedSingle
+            };
+            var bigScore = new Label {
+                Text = "--",
+                Location = new Point(16, 12),
+                Size = new Size(72, 48),
+                Font = new Font("Microsoft YaHei UI", 24f, FontStyle.Bold),
+                ForeColor = BrandIndigo,
+                TextAlign = ContentAlignment.MiddleCenter
+            };
+            var gradePill = new Label {
+                Text = "评级 --",
+                Location = new Point(16, 62),
+                Size = new Size(72, 22),
+                Font = new Font("Microsoft YaHei UI", 8.5f, FontStyle.Bold),
+                BackColor = Color.FromArgb(241, 245, 249),
+                ForeColor = TextSecondary,
+                TextAlign = ContentAlignment.MiddleCenter
+            };
+            var scoreHeadline = new Label {
+                Text = "正在检测非 TUN 网络环境评分与门禁状态……",
+                Location = new Point(102, 16),
+                Size = new Size(654, 24),
+                Font = new Font("Microsoft YaHei UI", 10.5f, FontStyle.Bold),
+                ForeColor = TextPrimary,
+                AutoEllipsis = true
+            };
+            var modeLabel = new Label { Text = "代理:", Location = new Point(102, 52), AutoSize = true, ForeColor = TextSecondary };
+            var modeBox = new ComboBox { Location = new Point(144, 48), Width = 96, DropDownStyle = ComboBoxStyle.DropDownList };
+            modeBox.Items.AddRange(new object[] { "Auto", "Dedicated", "Shared" });
+            modeBox.SelectedIndex = 0;
+            var urlLabel = new Label { Text = "检测页:", Location = new Point(250, 52), AutoSize = true, ForeColor = TextSecondary };
+            var urlBox = new ComboBox { Location = new Point(304, 48), Width = 264, DropDownStyle = ComboBoxStyle.DropDown };
+            urlBox.Items.AddRange(new object[] { "https://ipkk.com/claude-ip-check", "https://claude.ai", "https://chatgpt.com" });
+            urlBox.Text = "https://ipkk.com/claude-ip-check";
+            var connCheck = new CheckBox { Text = "实测连通性", Location = new Point(580, 50), AutoSize = true, ForeColor = TextSecondary };
+            var btnRefresh = new Button { Text = "刷新评分", Location = new Point(682, 46), Size = new Size(78, 30) };
+            StyleAccentOutlineButton(btnRefresh, BrandIndigo);
+            scoreCard.Controls.AddRange(new Control[] { bigScore, gradePill, scoreHeadline, modeLabel, modeBox, urlLabel, urlBox, connCheck, btnRefresh });
+
+            var breakdownList = new ListView {
+                Location = new Point(18, 120),
+                Size = new Size(772, 198),
+                View = View.Details,
+                FullRowSelect = true,
+                GridLines = true,
+                BackColor = CardBg,
+                BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font("Microsoft YaHei UI", 9f)
+            };
+            breakdownList.Columns.Add("状态", 62);
+            breakdownList.Columns.Add("检查维度", 140);
+            breakdownList.Columns.Add("扣分", 54);
+            breakdownList.Columns.Add("详情与优化建议", 492);
+
+            var outputBox = new TextBox {
+                Location = new Point(18, 328),
+                Size = new Size(772, 130),
+                Multiline = true,
+                ReadOnly = true,
+                ScrollBars = ScrollBars.Vertical,
+                BackColor = CardBg,
+                BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font("Consolas", 9f),
+                ForeColor = TextSecondary,
+                Text = "正在运行非 TUN 基线与评分分析，请稍候……"
+            };
+
+            var btnAutoFix = new Button { Text = "一键修复防泄露", Location = new Point(18, 468), Size = new Size(132, 34) };
+            var btnEnablePolicy = new Button { Text = "仅写浏览器策略", Location = new Point(158, 468), Size = new Size(124, 34) };
+            var btnRestorePolicy = new Button { Text = "还原策略", Location = new Point(290, 468), Size = new Size(88, 34) };
+            var btnSafeBrowser = new Button { Text = "打开隔离检测浏览器", Location = new Point(386, 468), Size = new Size(156, 34) };
+            var btnCliTerminal = new Button { Text = "打开 CLI 代理终端", Location = new Point(18, 510), Size = new Size(146, 34) };
+            var btnCliUserSet = new Button { Text = "写入用户级 CLI 代理", Location = new Point(172, 510), Size = new Size(158, 34) };
+            var btnCliUserClear = new Button { Text = "清除用户级 CLI 代理", Location = new Point(338, 510), Size = new Size(158, 34) };
+            var btnClose = new Button { Text = "关闭", Location = new Point(698, 510), Size = new Size(92, 34), DialogResult = DialogResult.Cancel };
+            StylePrimaryButton(btnAutoFix, Color.FromArgb(22, 163, 74));
+            StyleSecondaryButton(btnEnablePolicy);
+            StyleSecondaryButton(btnRestorePolicy);
+            StyleAccentOutlineButton(btnSafeBrowser, BrandIndigo);
+            StyleSecondaryButton(btnCliTerminal);
+            StyleSecondaryButton(btnCliUserSet);
+            StyleSecondaryButton(btnCliUserClear);
+            StyleSecondaryButton(btnClose);
+
+            var actionButtons = new Button[] { btnRefresh, btnAutoFix, btnEnablePolicy, btnRestorePolicy, btnSafeBrowser, btnCliTerminal, btnCliUserSet, btnCliUserClear };
+            Action<bool> setBusy = delegate(bool busy) {
+                foreach (var b in actionButtons) b.Enabled = !busy;
+            };
+            Action<RiskScoreResult> renderDialogRisk = delegate(RiskScoreResult risk) {
+                if (risk == null) return;
+                bigScore.Text = risk.Score.ToString();
+                gradePill.Text = "评级 " + (risk.Grade ?? "--");
+                if (risk.PassedGate) {
+                    bigScore.ForeColor = Color.FromArgb(24, 106, 65);
+                    gradePill.BackColor = Color.FromArgb(220, 252, 231);
+                    gradePill.ForeColor = Color.FromArgb(24, 106, 65);
+                } else {
+                    bigScore.ForeColor = Color.FromArgb(163, 59, 42);
+                    gradePill.BackColor = Color.FromArgb(254, 226, 226);
+                    gradePill.ForeColor = Color.FromArgb(163, 59, 42);
+                }
+                scoreHeadline.Text = risk.Summary ?? "";
+                breakdownList.BeginUpdate();
+                breakdownList.Items.Clear();
+                if (risk.Breakdown != null) {
+                    foreach (var item in risk.Breakdown) {
+                        var row = new ListViewItem(item.Status ?? "");
+                        row.SubItems.Add(item.Label ?? "");
+                        row.SubItems.Add(item.Points > 0 ? "+" + item.Points : "0");
+                        string detail = item.Detail ?? "";
+                        if (!String.IsNullOrEmpty(item.FixHint) && item.Points > 0) detail += " [建议: " + item.FixHint + "]";
+                        row.SubItems.Add(detail);
+                        if (item.Status == "Risk") row.ForeColor = Color.FromArgb(163, 59, 42);
+                        else if (item.Status == "Warn") row.ForeColor = Color.FromArgb(145, 99, 20);
+                        else if (item.Status == "Pass") row.ForeColor = Color.FromArgb(24, 106, 65);
+                        else row.ForeColor = TextMuted;
+                        breakdownList.Items.Add(row);
+                    }
+                }
+                breakdownList.EndUpdate();
+                ApplyRiskScoreView(risk);
+            };
+            Func<string, Task> invokeAction = async delegate(string act) {
+                setBusy(true);
+                try {
+                    var res = await RunNetworkEnvBridge(act, Convert.ToString(modeBox.SelectedItem), urlBox.Text.Trim(), connCheck.Checked, -1, null);
+                    if (!dlg.IsDisposed) {
+                        string msg = (res != null && !String.IsNullOrEmpty(res.Message)) ? res.Message : "操作已完成。";
+                        outputBox.Text = msg.Replace("\r\n", "\n").Replace("\n", Environment.NewLine);
+                        if (res != null && res.RiskScore != null) renderDialogRisk(res.RiskScore);
+                    }
+                } catch (Exception ex) {
+                    if (!dlg.IsDisposed) outputBox.Text = "执行异常：" + ex.Message;
+                } finally {
+                    if (!dlg.IsDisposed) setBusy(false);
+                }
+            };
+
+            btnRefresh.Click += async delegate { await invokeAction("NetworkEnvCheck"); };
+            btnAutoFix.Click += async delegate { await invokeAction("NetworkEnvAutoFix"); };
+            btnEnablePolicy.Click += async delegate { await invokeAction("NetworkEnvEnablePolicy"); };
+            btnRestorePolicy.Click += async delegate { await invokeAction("NetworkEnvRestorePolicy"); };
+            btnSafeBrowser.Click += async delegate { await invokeAction("NetworkEnvLaunchSafeBrowser"); };
+            btnCliTerminal.Click += async delegate { await invokeAction("NetworkEnvCliTerminal"); };
+            btnCliUserSet.Click += async delegate { await invokeAction("NetworkEnvCliEnable"); };
+            btnCliUserClear.Click += async delegate { await invokeAction("NetworkEnvCliClear"); };
+
+            dlg.Controls.AddRange(new Control[] {
+                scoreCard, breakdownList, outputBox,
+                btnAutoFix, btnEnablePolicy, btnRestorePolicy, btnSafeBrowser,
+                btnCliTerminal, btnCliUserSet, btnCliUserClear, btnClose
+            });
+            dlg.Shown += async delegate { await invokeAction("NetworkEnvCheck"); };
+            dlg.ShowDialog(this);
+        }
+    }
+    public class UiResult {public bool Pending {get;set;}public string OperationId {get;set;} public bool Success {get;set;} public string Message {get;set;} public bool SessionVerified {get;set;} public bool SupervisorVerified {get;set;} public string FailureKind {get;set;} public string ActionId {get;set;} public ApiResult ApiTransport {get;set;} public RiskScoreResult RiskScore {get;set;} }
+    public class RiskScoreResult {public int Score {get;set;} public string Grade {get;set;} public int Threshold {get;set;} public bool GateEnabled {get;set;} public bool PassedGate {get;set;} public string[] TopRisks {get;set;} public string Summary {get;set;} public RiskBreakdownItem[] Breakdown {get;set;} }
+    public class RiskBreakdownItem {public string Id {get;set;} public string Label {get;set;} public int Points {get;set;} public int MaxPoints {get;set;} public string Status {get;set;} public string Detail {get;set;} public string FixHint {get;set;} }
     public class ApiResult {public int CurlExitCode {get;set;}}
     public class HealthResult { public int SchemaVersion {get;set;} public string Time {get;set;} public string Status {get;set;} public string RunId {get;set;} public int HostPid {get;set;} public string HostStarted {get;set;} public int SupervisorPid {get;set;} public string SupervisorStarted {get;set;} public string LastSafetyCheck {get;set;} public string LastEgressCheck {get;set;} public EgressResult LastVerifiedEgress {get;set;} public int ConsecutiveFailures {get;set;} public string NextProbe {get;set;} }
     public class EgressResult {public int VerifiedProbeCount {get;set;}public string CloudflareIp {get;set;}public string IpifyIp {get;set;}}
