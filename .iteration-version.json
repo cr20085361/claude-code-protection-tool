@@ -5,8 +5,8 @@
     "recorded_at": "2026-10-01T12:03:55+08:00",
     "version_source": null
   },
-  "current_version": "v1.6.1",
-  "completed_iterations": 24,
+  "current_version": "v1.7.0",
+  "completed_iterations": 26,
   "history": [
     {
       "id": "1ed80264-8644-40fd-a830-3d725048fa07",
@@ -808,7 +808,39 @@
       "source_fingerprint": {
         "algorithm": "sha256",
         "scope": "root-source-and-AGENTS-v1",
-        "sha256": "8edb6e483e3ee7e608df938597269568fde01287515a7ced3d146b38e84de4b7",
+        "sha256": "4975c86a46cb7a487b6899f7cfe7926d8877dfb3e15aab1e76198237f673146d",
+        "file_count": 77
+      }
+    },
+    {
+      "id": "1aff75c5-ff41-49f1-b61b-ab6ffce70f2b",
+      "from_version": "v1.6.1",
+      "to_version": "v1.6.2",
+      "level": "patch",
+      "summary": "修复暂停后台守护期间 WMI 进程退出竞态报错「找不到 」及安装前维护回滚缺少 Set-CodeAccessOnlyAcl 作用域问题，并支持恢复后直接复用已核验官方安装包",
+      "verification": "Test-ClaudeLifecycle (29 cases incl. exited-worker-wmi-not-found-ignored), Test-ClaudeMaintenance (46 PS + 10 C#), Test-ClaudeDesktopUpdate (94 cases), Test-CodeRollbackPermissions, Test-ClaudeIterationVersion (-BaselineFile private/baseline-v1.6.2.json), Test-ClaudeVersionWindow, Test-ClaudeSupervisorHealth PASS; candidate and installed ClaudeProGuard.exe v1.6.2 (1.6.2.0) verified.",
+      "recorded_at": "2026-11-14T14:09:33.7583897+08:00",
+      "completed_at": "2026-11-14T14:09:33.7583897+08:00",
+      "source_fingerprint": {
+        "algorithm": "sha256",
+        "scope": "root-source-and-AGENTS-v1",
+        "sha256": "4975c86a46cb7a487b6899f7cfe7926d8877dfb3e15aab1e76198237f673146d",
+        "file_count": 77
+      }
+    },
+    {
+      "id": "2d9dc478-5cae-45c2-b2a8-35dc4f7c0c7c",
+      "from_version": "v1.6.2",
+      "to_version": "v1.7.0",
+      "level": "minor",
+      "summary": "新增运行期动态网络风险巡检、可修复项静默自愈（系统代理/PAC、CLI 环境变量与可写浏览器策略）及分级风控阻断（动态:自愈+告警 / 超限停Claude / 仅预警 / 关闭）",
+      "verification": "Test-ClaudeNetworkEnv (13 cases incl. dynamic auto-heal and strict terminate), Test-ClaudeDesktopUpdateWindow (79), Test-ClaudeMaintenanceUiFixture (7), Test-ClaudeVersionWindow (13), Test-ClaudeSupervisorHealth (26 C# + PS), Test-ClaudeIterationVersion (-BaselineFile private/baseline-v1.7.0.json) PASS; candidate and installed ClaudeProGuard.exe v1.7.0 (1.7.0.0) verified with proxy and supervisor continuity preserved.",
+      "recorded_at": "2026-11-14T15:01:23.7269457+08:00",
+      "completed_at": "2026-11-14T15:01:23.7269457+08:00",
+      "source_fingerprint": {
+        "algorithm": "sha256",
+        "scope": "root-source-and-AGENTS-v1",
+        "sha256": "7bf5061be316c8c231b1017f41fff94e30df73235fe541b50458bf707adaec63",
         "file_count": 77
       }
     }

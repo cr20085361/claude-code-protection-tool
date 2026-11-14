@@ -1,4 +1,4 @@
-# 计划任务、后台宿主和维护迁移共用的生命周期规则；仅由 ClaudeGuard.psm1 加载。
+﻿# 计划任务、后台宿主和维护迁移共用的生命周期规则；仅由 ClaudeGuard.psm1 加载。
 function Get-GuardLifecycleValue($Object,[string]$Name,$Default=$null) {
     if($null -eq $Object){return $Default}
     if($Object -is [Collections.IDictionary]){if($Object.Contains($Name)){return $Object[$Name]};return $Default}
@@ -173,16 +173,30 @@ function Get-GuardSupervisorProcessIdentities($State) {
         if(-not $kind){continue}
         $process=Get-Process -Id $candidate.ProcessId -ErrorAction SilentlyContinue
         if(-not $process){continue}
-        $owner=Invoke-CimMethod -InputObject $candidate -MethodName GetOwnerSid
-        if($owner.ReturnValue -ne 0 -or $owner.Sid -ne $State.UserSid){throw 'Supervisor process owner changed; refusing process termination.'}
-        $result+=[pscustomobject]@{Pid=[int]$candidate.ProcessId;Started=$process.StartTime.ToUniversalTime().ToString('o');Path=[string]$candidate.ExecutablePath;CommandLine=$command;Kind=$kind}
+        $started=$null
+        try{$started=$process.StartTime.ToUniversalTime().ToString('o')}catch{continue}
+        $owner=$null
+        try{$owner=Invoke-CimMethod -InputObject $candidate -MethodName GetOwnerSid}catch{
+            $stillLive=Get-Process -Id $candidate.ProcessId -ErrorAction SilentlyContinue
+            if(-not $stillLive -or $stillLive.HasExited){continue}
+            try{if($stillLive.WaitForExit(300)){continue}}catch{continue}
+            throw
+        }
+        if($owner.ReturnValue -ne 0){
+            $stillLive=Get-Process -Id $candidate.ProcessId -ErrorAction SilentlyContinue
+            if(-not $stillLive -or $stillLive.HasExited){continue}
+            try{if($stillLive.WaitForExit(300)){continue}}catch{continue}
+            throw 'Supervisor process owner changed; refusing process termination.'
+        }
+        if($owner.Sid -ne $State.UserSid){throw 'Supervisor process owner changed; refusing process termination.'}
+        $result+=[pscustomobject]@{Pid=[int]$candidate.ProcessId;Started=$started;Path=[string]$candidate.ExecutablePath;CommandLine=$command;Kind=$kind}
     }
     $result
 }
 function Test-GuardSupervisorProcessIdentity($Identity) {
     $live=Get-Process -Id $Identity.Pid -ErrorAction SilentlyContinue
     if(-not $live){return $false}
-    if($live.StartTime.ToUniversalTime().Ticks -ne ([datetime]$Identity.Started).ToUniversalTime().Ticks){return $false}
+    try{if($live.StartTime.ToUniversalTime().Ticks -ne ([datetime]$Identity.Started).ToUniversalTime().Ticks){return $false}}catch{return $false}
     $cim=Get-CimInstance Win32_Process -Filter ('ProcessId='+$Identity.Pid) -ErrorAction SilentlyContinue
     ($cim -and $cim.ExecutablePath -eq $Identity.Path -and ([string]$cim.CommandLine).Trim() -eq $Identity.CommandLine)
 }
@@ -191,8 +205,7 @@ function Stop-GuardSupervisorProcessIdentity($Identity) {
     if(-not $live){return}
     try {
         # 固定到内核进程句柄，再核验启动时间；PID 在核验与结束之间复用也不会终止新进程。
-        $null=$live.Handle
-        if($live.StartTime.ToUniversalTime().Ticks -ne ([datetime]$Identity.Started).ToUniversalTime().Ticks){return}
+        try{$null=$live.Handle;if($live.StartTime.ToUniversalTime().Ticks -ne ([datetime]$Identity.Started).ToUniversalTime().Ticks){return}}catch{return}
         $cim=Get-CimInstance Win32_Process -Filter ('ProcessId='+$Identity.Pid) -ErrorAction SilentlyContinue
         if(-not $cim -or $cim.ExecutablePath -ne $Identity.Path -or ([string]$cim.CommandLine).Trim() -ne $Identity.CommandLine){return}
         if(-not $live.HasExited){$live.Kill()}
@@ -400,6 +413,7 @@ function Sync-GuardMaintenanceUiResult([string]$OperationId) {
     }
 }
 function Restore-GuardCodeMigrationPermissions($Backup) {
+    if(-not (Get-Command Set-CodeAccessOnlyAcl -ErrorAction SilentlyContinue)){Import-Module (Join-Path $script:Root 'ClaudeCodeGate.psm1')}
     $current=Get-GuardState
     $candidatePaths=@(Get-GuardLifecycleValue $Backup 'CandidateCodePaths' @())
     foreach($path in $candidatePaths){

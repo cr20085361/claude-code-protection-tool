@@ -10,11 +10,11 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
-[assembly: System.Reflection.AssemblyVersion("1.6.1.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.6.1.0")]
+[assembly: System.Reflection.AssemblyVersion("1.7.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.7.0.0")]
 
 public sealed class ClaudeGuardWindow : Form {
-    public const string BuildVersion="v1.6.1";
+    public const string BuildVersion="v1.7.0";
     static readonly Color CanvasBg=Color.FromArgb(244,246,249);
     static readonly Color CardBg=Color.White;
     static readonly Color CardBorder=Color.FromArgb(226,232,240);
@@ -59,9 +59,11 @@ public sealed class ClaudeGuardWindow : Form {
     readonly Label riskSummaryLabel = new Label();
     readonly CheckBox gateToggle = new CheckBox();
     readonly NumericUpDown thresholdInput = new NumericUpDown();
+    readonly ComboBox runtimeModeBox = new ComboBox();
     readonly Button quickFixButton = new Button();
     readonly Button refreshScoreButton = new Button();
     bool suppressGateEvents;
+    bool riskWatchBusy;
     bool updateDispatchBusy;
     bool officialDownloadReady;
     string installedDesktopVersion;
@@ -71,6 +73,7 @@ public sealed class ClaudeGuardWindow : Form {
     bool versionBusy;
     DateTimeOffset nextCatalogCheck=DateTimeOffset.MinValue;
     readonly System.Windows.Forms.Timer healthTimer = new System.Windows.Forms.Timer();
+    readonly System.Windows.Forms.Timer riskWatchTimer = new System.Windows.Forms.Timer();
     readonly string root;
     readonly string shell;
     readonly JavaScriptSerializer json = new JavaScriptSerializer();
@@ -236,20 +239,24 @@ public sealed class ClaudeGuardWindow : Form {
         riskSummaryLabel.SetBounds(42,514,616,24);riskSummaryLabel.Font=new Font("Microsoft YaHei UI",9f,FontStyle.Bold);riskSummaryLabel.ForeColor=TextPrimary;riskSummaryLabel.BackColor=CardBg;riskSummaryLabel.AutoEllipsis=true;
         riskSummaryLabel.Text="非 TUN 网络风险门禁：等待首次检测（低于门限方可启动 Claude）。";
         gateToggle.Text="启用门限 ≤";gateToggle.Location=new Point(42,553);gateToggle.AutoSize=true;gateToggle.Checked=true;gateToggle.BackColor=CardBg;gateToggle.ForeColor=TextSecondary;
-        thresholdInput.SetBounds(138,550,58,25);thresholdInput.Minimum=0;thresholdInput.Maximum=100;thresholdInput.Value=20;
-        quickFixButton.SetBounds(210,548,124,32);quickFixButton.Text="一键防泄露修复";StylePrimaryButton(quickFixButton, Color.FromArgb(22,163,74));
-        refreshScoreButton.SetBounds(344,548,96,32);refreshScoreButton.Text="重测评分";StyleSecondaryButton(refreshScoreButton);
+        thresholdInput.SetBounds(134,550,52,25);thresholdInput.Minimum=0;thresholdInput.Maximum=100;thresholdInput.Value=20;
+        runtimeModeBox.DropDownStyle=ComboBoxStyle.DropDownList;runtimeModeBox.Font=new Font("Microsoft YaHei UI",8.5f);runtimeModeBox.SetBounds(194,550,122,25);
+        runtimeModeBox.Items.AddRange(new object[]{"动态:自愈+告警","动态:超限停Claude","动态:仅预警","动态:关闭"});runtimeModeBox.SelectedIndex=0;
+        quickFixButton.SetBounds(324,548,114,32);quickFixButton.Text="一键防泄露修复";StylePrimaryButton(quickFixButton, Color.FromArgb(22,163,74));
+        refreshScoreButton.SetBounds(446,548,86,32);refreshScoreButton.Text="重测评分";StyleSecondaryButton(refreshScoreButton);
         networkEnvButton.SetBounds(540,548,118,32);networkEnvButton.Text="网络优化";StyleAccentOutlineButton(networkEnvButton, BrandIndigo);
         gateToggle.CheckedChanged+=async delegate { if(!suppressGateEvents && !PreviewOnly) await SaveRiskGateConfigAsync(); };
         thresholdInput.ValueChanged+=async delegate { if(!suppressGateEvents && !PreviewOnly) await SaveRiskGateConfigAsync(); };
+        runtimeModeBox.SelectedIndexChanged+=async delegate { if(!suppressGateEvents && !PreviewOnly) await SaveRiskGateConfigAsync(); };
         quickFixButton.Click+=async delegate { await RunQuickNetworkFixAsync(); };
         refreshScoreButton.Click+=async delegate { await RefreshRiskScoreAsync(false); };
         networkEnvButton.Click+=delegate { ShowNetworkEnvDialog(); };
 
-        Controls.AddRange(new Control[]{installedVersions,runtimeVersions,updateStatus,checkUpdates,downloadStatus,downloadUpdates,installUpdates,entryVersion,riskSummaryLabel,gateToggle,thresholdInput,quickFixButton,refreshScoreButton,networkEnvButton});
+        Controls.AddRange(new Control[]{installedVersions,runtimeVersions,updateStatus,checkUpdates,downloadStatus,downloadUpdates,installUpdates,entryVersion,riskSummaryLabel,gateToggle,thresholdInput,runtimeModeBox,quickFixButton,refreshScoreButton,networkEnvButton});
         healthTimer.Interval=2000;healthTimer.Tick+=delegate { RefreshClientState();RefreshNetworkHealth();RefreshDesktopUpdate(); };healthTimer.Start();
         versionTimer.Interval=10000;versionTimer.Tick+=async delegate {if(!PreviewOnly)await RefreshVersionInfo(false,DateTimeOffset.UtcNow>=nextCatalogCheck);};versionTimer.Start();
-        FormClosed+=delegate {healthTimer.Stop();healthTimer.Dispose();versionTimer.Stop();versionTimer.Dispose();};
+        riskWatchTimer.Interval=25000;riskWatchTimer.Tick+=async delegate {if(!PreviewOnly)await PollRuntimeRiskWatchAsync();};riskWatchTimer.Start();
+        FormClosed+=delegate {healthTimer.Stop();healthTimer.Dispose();versionTimer.Stop();versionTimer.Dispose();riskWatchTimer.Stop();riskWatchTimer.Dispose();};
         var iconPath=Path.Combine(root,"runtime","claude-guard.ico"); if(File.Exists(iconPath)) Icon=new Icon(iconPath);
         Shown+=async delegate { if(!PreviewOnly) {var versions=RefreshVersionInfo(false,true);var scoreTask=RefreshRiskScoreAsync(false);if(ResumeMaintenanceOnOpen() || ResumeDesktopUpdateOnOpen())RefreshNetworkHealth();else if(StatusViewOnly){guardWarning=true;RefreshNetworkHealth();}else if(MaintenanceViewOnly){status.Text="请完全退出 Claude 和本地 Code 后，点击“维护版本”。";RefreshNetworkHealth();}else await RunAction("Start");await versions;await scoreTask;} };
     }
@@ -319,6 +326,9 @@ public sealed class ClaudeGuardWindow : Form {
     void RefreshDesktopUpdate(){try{var d=ReadDesktopUpdate();RenderDesktopUpdate(d);RenderClientState(IsClaudeOpen(),updateDispatchBusy || IsDesktopInstallationActive(d));}catch{downloadUpdates.Enabled=installUpdates.Enabled=false;downloadStatus.Text="更新记录暂时无法确认，请查看本地说明。";downloadStatus.ForeColor=Color.FromArgb(163,59,42);}}
     public void RenderClientState(bool desktopOpen,bool installing) {
         launch.Text=installing?"更新进行中":desktopOpen?"Claude 已打开":"打开 Claude";
+        if(desktopOpen && lastDesktopOpen==false && !installing && !PreviewOnly){
+            var _=PollRuntimeRiskWatchAsync();
+        }
         if(!desktopOpen && lastDesktopOpen==true && !installing && !actionBusy && !guardWarning && check.Enabled && status.ForeColor==Color.FromArgb(24,106,65) && status.Text.Contains("Claude 已打开")){
             lastSuccessMessage="Claude 已退出。点击“打开 Claude”继续。";status.Text=lastSuccessMessage;
         }
@@ -604,6 +614,20 @@ public sealed class ClaudeGuardWindow : Form {
             }
         } catch {}
     }
+    static string RuntimeModeFromIndex(int idx) {
+        switch(idx) {
+            case 1: return "StrictTerminate";
+            case 2: return "WarnOnly";
+            case 3: return "Disabled";
+            default: return "AutoHealAndWarn";
+        }
+    }
+    static int RuntimeModeToIndex(string mode) {
+        if(mode=="StrictTerminate")return 1;
+        if(mode=="WarnOnly")return 2;
+        if(mode=="Disabled")return 3;
+        return 0;
+    }
     void ApplyRiskScoreView(RiskScoreResult risk) {
         if(risk==null || IsDisposed)return;
         suppressGateEvents=true;
@@ -612,6 +636,11 @@ public sealed class ClaudeGuardWindow : Form {
             int t=Math.Max(0,Math.Min(100,risk.Threshold));
             if((int)thresholdInput.Value!=t)thresholdInput.Value=t;
             thresholdInput.Enabled=risk.GateEnabled;
+            int mIdx=RuntimeModeToIndex(risk.RuntimeEnforcementMode);
+            if(runtimeModeBox.SelectedIndex!=mIdx)runtimeModeBox.SelectedIndex=mIdx;
+            if(risk.WatchIntervalSeconds>=10 && risk.WatchIntervalSeconds<=300 && riskWatchTimer.Interval!=risk.WatchIntervalSeconds*1000){
+                riskWatchTimer.Interval=risk.WatchIntervalSeconds*1000;
+            }
         } finally { suppressGateEvents=false; }
         string gateDesc=risk.GateEnabled?("门限 ≤ "+risk.Threshold):"门禁关";
         riskBadgeLabel.Text=String.Format("风险 {0} · {1} | {2}",risk.Score,risk.Grade??"--",gateDesc);
@@ -626,27 +655,50 @@ public sealed class ClaudeGuardWindow : Form {
             riskBadgeLabel.ForeColor=Color.FromArgb(163,59,42);
         }
         string topDesc=(risk.TopRisks!=null && risk.TopRisks.Length>0)?(" | 扣分: "+String.Join("、",risk.TopRisks)):"";
-        riskSummaryLabel.Text=String.Format("非 TUN 风险分: {0} / 100 ({1} 级) · {2}{3}",risk.Score,risk.Grade??"--",risk.GateEnabled?(risk.PassedGate?"允许启动":"超出门限 "+risk.Threshold+"，已拦截启动"):"门禁关闭",topDesc);
-        riskSummaryLabel.ForeColor=(!risk.GateEnabled || risk.PassedGate)?(risk.Score<=8?Color.FromArgb(24,106,65):TextPrimary):Color.FromArgb(163,59,42);
+        if(!String.IsNullOrEmpty(risk.RuntimeAlertMessage) && (risk.RuntimeStatus=="AutoHealed" || risk.RuntimeStatus=="Breached" || risk.RuntimeStatus=="TerminatedOnBreach" || risk.RuntimeStatus=="DegradedWithinGate")) {
+            riskSummaryLabel.Text=risk.RuntimeAlertMessage;
+        } else {
+            string stateLabel=risk.GateEnabled?(risk.PassedGate?(risk.DynamicWatchEnabled?"允许启动 · 动态巡检中":"允许启动"):"超出门限 "+risk.Threshold+"，已拦截启动"):"门禁关闭";
+            riskSummaryLabel.Text=String.Format("非 TUN 风险分: {0} / 100 ({1} 级) · {2}{3}",risk.Score,risk.Grade??"--",stateLabel,topDesc);
+        }
+        riskSummaryLabel.ForeColor=(!risk.GateEnabled || risk.PassedGate)?(risk.Score<=8 || risk.RuntimeStatus=="AutoHealed"?Color.FromArgb(24,106,65):TextPrimary):Color.FromArgb(163,59,42);
+        if(risk.TerminatedProtectedProcesses && !actionBusy) {
+            status.Text=risk.RuntimeAlertMessage+"\n请点击下方“一键防泄露修复”恢复网络环境后再重新打开 Claude。";
+            status.ForeColor=Color.FromArgb(163,59,42);
+            RefreshClientState();
+        } else if(risk.RuntimeStatus=="Breached" && IsClaudeOpen() && !actionBusy) {
+            status.Text=risk.RuntimeAlertMessage+"\n当前 Claude 仍在运行，建议立即点击下方“一键防泄露修复”消除暴露风险！";
+            status.ForeColor=Color.FromArgb(163,59,42);
+        }
         Invalidate();
+    }
+    async Task PollRuntimeRiskWatchAsync() {
+        if(riskWatchBusy || actionBusy || updateDispatchBusy || IsDisposed || PreviewOnly)return;
+        if(runtimeModeBox.SelectedIndex==3)return;
+        riskWatchBusy=true;
+        try {
+            var res=await RunNetworkEnvBridge("NetworkEnvRuntimeWatch","Auto",null,false,-1,null,null);
+            if(!IsDisposed && res!=null && res.RiskScore!=null)ApplyRiskScoreView(res.RiskScore);
+        } catch {} finally { riskWatchBusy=false; }
     }
     async Task RefreshRiskScoreAsync(bool checkConnectivity) {
         try {
             refreshScoreButton.Enabled=false;
-            var res=await RunNetworkEnvBridge("NetworkEnvScore","Auto",null,checkConnectivity,-1,null);
+            var res=await RunNetworkEnvBridge("NetworkEnvRuntimeWatch","Auto",null,checkConnectivity,-1,null,null);
             if(!IsDisposed && res!=null && res.RiskScore!=null)ApplyRiskScoreView(res.RiskScore);
         } catch {} finally { if(!IsDisposed)refreshScoreButton.Enabled=true; }
     }
     async Task SaveRiskGateConfigAsync() {
         try {
-            var res=await RunNetworkEnvBridge("NetworkEnvSetGate","Auto",null,false,(int)thresholdInput.Value,gateToggle.Checked);
+            string mode=RuntimeModeFromIndex(runtimeModeBox.SelectedIndex);
+            var res=await RunNetworkEnvBridge("NetworkEnvSetGate","Auto",null,false,(int)thresholdInput.Value,gateToggle.Checked,mode);
             if(!IsDisposed && res!=null && res.RiskScore!=null)ApplyRiskScoreView(res.RiskScore);
         } catch {}
     }
     async Task RunQuickNetworkFixAsync() {
         quickFixButton.Enabled=false;refreshScoreButton.Enabled=false;
         try {
-            var res=await RunNetworkEnvBridge("NetworkEnvAutoFix","Auto",null,false,-1,null);
+            var res=await RunNetworkEnvBridge("NetworkEnvAutoFix","Auto",null,false,-1,null,null);
             if(IsDisposed)return;
             if(res!=null) {
                 if(res.RiskScore!=null)ApplyRiskScoreView(res.RiskScore);
@@ -663,7 +715,7 @@ public sealed class ClaudeGuardWindow : Form {
             }
         } catch {} finally { if(!IsDisposed){quickFixButton.Enabled=true;refreshScoreButton.Enabled=true;} }
     }
-    async Task<UiResult> RunNetworkEnvBridge(string action, string proxyMode, string targetUrl, bool checkConnectivity, int threshold, bool? gateEnabled) {
+    async Task<UiResult> RunNetworkEnvBridge(string action, string proxyMode, string targetUrl, bool checkConnectivity, int threshold, bool? gateEnabled, string runtimeMode) {
         return await Task.Run(delegate {
             string file = Path.Combine(root, "private", "ui-result-" + Guid.NewGuid().ToString("N") + ".json");
             try {
@@ -677,6 +729,7 @@ public sealed class ClaudeGuardWindow : Form {
                 if (checkConnectivity) sb.Append(" -CheckConnectivity");
                 if (threshold >= 0) sb.Append(" -Threshold ").Append(threshold);
                 if (gateEnabled.HasValue) sb.Append(" -GateEnabled ").Append(gateEnabled.Value ? "True" : "False");
+                if (!String.IsNullOrEmpty(runtimeMode)) sb.Append(" -RuntimeEnforcementMode ").Append(runtimeMode);
                 var psi = new ProcessStartInfo(shell) {
                     UseShellExecute = false,
                     CreateNoWindow = true,
@@ -787,6 +840,7 @@ public sealed class ClaudeGuardWindow : Form {
             var btnCliTerminal = new Button { Text = "打开 CLI 代理终端", Location = new Point(18, 510), Size = new Size(146, 34) };
             var btnCliUserSet = new Button { Text = "写入用户级 CLI 代理", Location = new Point(172, 510), Size = new Size(158, 34) };
             var btnCliUserClear = new Button { Text = "清除用户级 CLI 代理", Location = new Point(338, 510), Size = new Size(158, 34) };
+            var btnRuntimeWatch = new Button { Text = "立即动态巡检", Location = new Point(504, 510), Size = new Size(124, 34) };
             var btnClose = new Button { Text = "关闭", Location = new Point(698, 510), Size = new Size(92, 34), DialogResult = DialogResult.Cancel };
             StylePrimaryButton(btnAutoFix, Color.FromArgb(22, 163, 74));
             StyleSecondaryButton(btnEnablePolicy);
@@ -795,9 +849,10 @@ public sealed class ClaudeGuardWindow : Form {
             StyleSecondaryButton(btnCliTerminal);
             StyleSecondaryButton(btnCliUserSet);
             StyleSecondaryButton(btnCliUserClear);
+            StyleAccentOutlineButton(btnRuntimeWatch, BrandTeal);
             StyleSecondaryButton(btnClose);
 
-            var actionButtons = new Button[] { btnRefresh, btnAutoFix, btnEnablePolicy, btnRestorePolicy, btnSafeBrowser, btnCliTerminal, btnCliUserSet, btnCliUserClear };
+            var actionButtons = new Button[] { btnRefresh, btnAutoFix, btnEnablePolicy, btnRestorePolicy, btnSafeBrowser, btnCliTerminal, btnCliUserSet, btnCliUserClear, btnRuntimeWatch };
             Action<bool> setBusy = delegate(bool busy) {
                 foreach (var b in actionButtons) b.Enabled = !busy;
             };
@@ -814,7 +869,9 @@ public sealed class ClaudeGuardWindow : Form {
                     gradePill.BackColor = Color.FromArgb(254, 226, 226);
                     gradePill.ForeColor = Color.FromArgb(163, 59, 42);
                 }
-                scoreHeadline.Text = risk.Summary ?? "";
+                string headline = risk.Summary ?? "";
+                if (!String.IsNullOrEmpty(risk.RuntimeAlertMessage)) headline = risk.RuntimeAlertMessage + " | " + headline;
+                scoreHeadline.Text = headline;
                 breakdownList.BeginUpdate();
                 breakdownList.Items.Clear();
                 if (risk.Breakdown != null) {
@@ -838,7 +895,7 @@ public sealed class ClaudeGuardWindow : Form {
             Func<string, Task> invokeAction = async delegate(string act) {
                 setBusy(true);
                 try {
-                    var res = await RunNetworkEnvBridge(act, Convert.ToString(modeBox.SelectedItem), urlBox.Text.Trim(), connCheck.Checked, -1, null);
+                    var res = await RunNetworkEnvBridge(act, Convert.ToString(modeBox.SelectedItem), urlBox.Text.Trim(), connCheck.Checked, -1, null, null);
                     if (!dlg.IsDisposed) {
                         string msg = (res != null && !String.IsNullOrEmpty(res.Message)) ? res.Message : "操作已完成。";
                         outputBox.Text = msg.Replace("\r\n", "\n").Replace("\n", Environment.NewLine);
@@ -859,18 +916,19 @@ public sealed class ClaudeGuardWindow : Form {
             btnCliTerminal.Click += async delegate { await invokeAction("NetworkEnvCliTerminal"); };
             btnCliUserSet.Click += async delegate { await invokeAction("NetworkEnvCliEnable"); };
             btnCliUserClear.Click += async delegate { await invokeAction("NetworkEnvCliClear"); };
+            btnRuntimeWatch.Click += async delegate { await invokeAction("NetworkEnvRuntimeWatch"); };
 
             dlg.Controls.AddRange(new Control[] {
                 scoreCard, breakdownList, outputBox,
                 btnAutoFix, btnEnablePolicy, btnRestorePolicy, btnSafeBrowser,
-                btnCliTerminal, btnCliUserSet, btnCliUserClear, btnClose
+                btnCliTerminal, btnCliUserSet, btnCliUserClear, btnRuntimeWatch, btnClose
             });
             dlg.Shown += async delegate { await invokeAction("NetworkEnvCheck"); };
             dlg.ShowDialog(this);
         }
     }
     public class UiResult {public bool Pending {get;set;}public string OperationId {get;set;} public bool Success {get;set;} public string Message {get;set;} public bool SessionVerified {get;set;} public bool SupervisorVerified {get;set;} public string FailureKind {get;set;} public string ActionId {get;set;} public ApiResult ApiTransport {get;set;} public RiskScoreResult RiskScore {get;set;} }
-    public class RiskScoreResult {public int Score {get;set;} public string Grade {get;set;} public int Threshold {get;set;} public bool GateEnabled {get;set;} public bool PassedGate {get;set;} public string[] TopRisks {get;set;} public string Summary {get;set;} public RiskBreakdownItem[] Breakdown {get;set;} }
+    public class RiskScoreResult {public int Score {get;set;} public string Grade {get;set;} public int Threshold {get;set;} public bool GateEnabled {get;set;} public bool PassedGate {get;set;} public bool DynamicWatchEnabled {get;set;} public int WatchIntervalSeconds {get;set;} public bool AutoHealOnDegrade {get;set;} public string RuntimeEnforcementMode {get;set;} public string RuntimeStatus {get;set;} public string RuntimeAlertMessage {get;set;} public string[] AutoHealedItems {get;set;} public string[] DegradedItems {get;set;} public bool TerminatedProtectedProcesses {get;set;} public int TerminatedProcessCount {get;set;} public string[] TopRisks {get;set;} public string Summary {get;set;} public RiskBreakdownItem[] Breakdown {get;set;} }
     public class RiskBreakdownItem {public string Id {get;set;} public string Label {get;set;} public int Points {get;set;} public int MaxPoints {get;set;} public string Status {get;set;} public string Detail {get;set;} public string FixHint {get;set;} }
     public class ApiResult {public int CurlExitCode {get;set;}}
     public class HealthResult { public int SchemaVersion {get;set;} public string Time {get;set;} public string Status {get;set;} public string RunId {get;set;} public int HostPid {get;set;} public string HostStarted {get;set;} public int SupervisorPid {get;set;} public string SupervisorStarted {get;set;} public string LastSafetyCheck {get;set;} public string LastEgressCheck {get;set;} public EgressResult LastVerifiedEgress {get;set;} public int ConsecutiveFailures {get;set;} public string NextProbe {get;set;} }

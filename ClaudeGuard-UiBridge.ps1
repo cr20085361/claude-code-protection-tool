@@ -1,6 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-    [ValidateSet('Start','Check','Login','Update','Diagnose','NetworkEnvCheck','NetworkEnvScore','NetworkEnvSetGate','NetworkEnvAutoFix','NetworkEnvEnablePolicy','NetworkEnvRestorePolicy','NetworkEnvLaunchSafeBrowser','NetworkEnvCliEnable','NetworkEnvCliClear','NetworkEnvCliTerminal')][string]$Action='Start',
+    [ValidateSet('Start','Check','Login','Update','Diagnose','NetworkEnvCheck','NetworkEnvScore','NetworkEnvRuntimeWatch','NetworkEnvSetGate','NetworkEnvAutoFix','NetworkEnvEnablePolicy','NetworkEnvRestorePolicy','NetworkEnvLaunchSafeBrowser','NetworkEnvCliEnable','NetworkEnvCliClear','NetworkEnvCliTerminal')][string]$Action='Start',
     [string]$ResultFile,
     [string]$ActionId,
     [string]$TargetUrl='https://ipkk.com/claude-ip-check',
@@ -8,6 +8,7 @@ param(
     [switch]$CheckConnectivity,
     [int]$Threshold=-1,
     [ValidateSet('Unchanged','True','False')][string]$GateEnabled='Unchanged',
+    [ValidateSet('','AutoHealAndWarn','StrictTerminate','WarnOnly','Disabled')][string]$RuntimeEnforcementMode='',
     [switch]$BypassRiskGate
 )
 $ErrorActionPreference='Stop'
@@ -64,13 +65,20 @@ if($isNetworkEnvAction){
                 $result.Message=$risk.Summary
                 $result.Success=$true
             }
+            'NetworkEnvRuntimeWatch'{
+                $risk=Invoke-NetworkEnvRuntimeWatch -CheckConnectivity:$CheckConnectivity -ProxyMode $ProxyMode
+                $result.RiskScore=$risk
+                $result.NetworkEnv=$risk.Baseline
+                $result.Message=if($risk.RuntimeAlertMessage){$risk.RuntimeAlertMessage}else{$risk.Summary}
+                $result.Success=$true
+            }
             'NetworkEnvSetGate'{
                 $gateVal=switch($GateEnabled){'True'{$true}'False'{$false}default{$null}}
                 $threshVal=if($Threshold -ge 0){$Threshold}else{$null}
-                $null=Set-NetworkEnvRiskConfig -GateEnabled $gateVal -MaxRiskScore $threshVal -ProxyMode $ProxyMode
+                $null=Set-NetworkEnvRiskConfig -GateEnabled $gateVal -MaxRiskScore $threshVal -ProxyMode $ProxyMode -RuntimeEnforcementMode $RuntimeEnforcementMode
                 $risk=Get-NetworkEnvRiskScore -CheckConnectivity:$CheckConnectivity -ProxyMode $ProxyMode
                 $result.RiskScore=$risk
-                $result.Message="已更新网络风险门禁配置。`r`n`r`n"+$risk.Summary
+                $result.Message="已更新网络风险门禁与动态巡检策略。`r`n`r`n"+$risk.Summary
                 $result.Success=$true
             }
             'NetworkEnvAutoFix'{
@@ -85,6 +93,7 @@ if($isNetworkEnvAction){
                     $null=Invoke-NetworkEnvElevatedBrowserPolicy -Mode Enable -Browser All -ShellPath (Get-GuardApprovedShellPath)
                 }
                 $risk=Get-NetworkEnvRiskScore -CheckConnectivity:$CheckConnectivity -ProxyMode $ProxyMode
+                try{$null=Save-NetworkEnvRuntimeBaseline -RiskReport $risk}catch{}
                 $result.RiskScore=$risk
                 $result.NetworkEnv=$risk.Baseline
                 $result.Message="已完成一键防泄露与代理修复（已自动备份原配置）。请重启已打开的浏览器生效。`r`n`r`n"+$risk.Summary+"`r`n`r`n"+$risk.Baseline.SummaryText
@@ -246,6 +255,7 @@ try {
             $result.Started=$true
             $result.Message=if($result.SessionVerified){'Claude 已打开。当前版本的本机本地 Code 基础使用验收已完成。'}else{'Claude 已打开。网络防护准备完成；Code 正常会话尚待验证。'}
         }
+        try{$null=Save-NetworkEnvRuntimeBaseline -RiskReport $riskGate}catch{}
     } elseif($Action -eq 'Login') {
         $m=Get-GuardMaintenanceSnapshot;if($m.Active -or $m.Interrupted -or ($m.Operation -and $m.Operation.RecoveryRequired)){throw 'MaintenanceInterrupted: 维护尚未结束，请先接续维护。'}
         Assert-GuardPolicy

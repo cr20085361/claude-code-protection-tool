@@ -1,7 +1,8 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([ValidateSet('Download','Install','InstallWorker','Observe')][string]$Action='Observe',[string]$OperationId,[string]$RequestHash,[string]$CommandId)
 $ErrorActionPreference='Stop'
 Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'ClaudeCodeGate.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard-VersionInfo.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard-DesktopUpdate.psm1') -Force
 if($Action -eq 'Observe'){Get-ClaudeDesktopUpdateSnapshot $PSScriptRoot|ConvertTo-Json -Depth 10 -Compress;exit 0}

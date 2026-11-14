@@ -247,6 +247,122 @@ try {
         $critical = Get-NetworkEnvRiskScore -Baseline $noProxyBaseline -ConfigPath $testRiskCfg
         if ($critical.Score -lt 55 -or $critical.PassedGate) { throw 'Missing local proxy must push score above threshold and block.' }
     }
+
+    Pass 'dynamic-runtime-watch-autoheal-and-warn' {
+        $testStatePath = Join-Path $PSScriptRoot ('private\test-netenv-state-' + [guid]::NewGuid().ToString('N') + '.json')
+        $tempRegRoot = 'HKCU:\Software\ClaudeGuardTest_' + [guid]::NewGuid().ToString('N')
+        $tempPolicyRoot = Join-Path $tempRegRoot 'Policies'
+        $tempInetKey = Join-Path $tempRegRoot 'InternetSettings'
+        $savedProcEnv = @{}
+        foreach ($k in @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'NO_PROXY', 'no_proxy')) {
+            $savedProcEnv[$k] = [Environment]::GetEnvironmentVariable($k, 'Process')
+        }
+        try {
+            $null = New-Item -Path $tempPolicyRoot -Force
+            $null = New-Item -Path $tempInetKey -Force
+            Set-ItemProperty -LiteralPath $tempInetKey -Name 'ProxyEnable' -Value 0 -Type DWord
+            Set-ItemProperty -LiteralPath $tempInetKey -Name 'AutoConfigURL' -Value 'http://hijack.local/pac.js' -Type String
+
+            $null = Set-NetworkEnvRiskConfig -GateEnabled $true -MaxRiskScore 20 -ProxyMode Auto -RuntimeEnforcementMode AutoHealAndWarn -ConfigPath $testRiskCfg
+
+            $cleanLaunchBaseline = [pscustomobject]@{
+                SystemProxy     = [pscustomobject]@{ ProxyEnable = $true; ParsedPort = 10808; AutoConfigURL = '' }
+                Listeners       = @([pscustomobject]@{ Port = 10808; Role = 'SystemProxy'; ProcessName = 'xray'; TcpAccepting = $true; Socks5Supported = $true; UdpAssociateSupported = $true })
+                BrowserPolicies = @([pscustomobject]@{ Browser = 'Chrome'; Installed = $true; FullyProtected = $true })
+                CliStatus       = [pscustomobject]@{ UserEnv = [pscustomobject]@{ HTTPS_PROXY = 'http://127.0.0.1:10808' }; ProcessEnv = [pscustomobject]@{ HTTPS_PROXY = 'http://127.0.0.1:10808' } }
+                IPv6Interfaces  = @()
+                TimezoneId      = 'China Standard Time'
+                Connectivity    = $null
+            }
+            $launchReport = Get-NetworkEnvRiskScore -Baseline $cleanLaunchBaseline -ConfigPath $testRiskCfg
+            if ($launchReport.Score -ne 8) { throw ("Expected clean launch score 8, got {0}" -f $launchReport.Score) }
+            $null = Save-NetworkEnvRuntimeBaseline -RiskReport $launchReport -StatePath $testStatePath
+
+            # Mid-session drift: SystemProxy disabled + PAC hijacked (+5), CLI env cleared (+2), Browser policy wiped (+18) => score 33 (> 20)
+            $driftedBaseline = [pscustomobject]@{
+                SystemProxy     = [pscustomobject]@{ ProxyEnable = $false; ParsedPort = $null; AutoConfigURL = 'http://hijack.local/pac.js' }
+                Listeners       = $cleanLaunchBaseline.Listeners
+                BrowserPolicies = @([pscustomobject]@{ Browser = 'Chrome'; Installed = $true; FullyProtected = $false })
+                CliStatus       = [pscustomobject]@{ UserEnv = [pscustomobject]@{ HTTPS_PROXY = $null }; ProcessEnv = [pscustomobject]@{ HTTPS_PROXY = $null } }
+                IPv6Interfaces  = @()
+                TimezoneId      = 'China Standard Time'
+                Connectivity    = $null
+            }
+
+            $watched = Invoke-NetworkEnvRuntimeWatch `
+                -ConfigPath $testRiskCfg `
+                -StatePath $testStatePath `
+                -RegistryRoot $tempPolicyRoot `
+                -InternetSettingsKey $tempInetKey `
+                -CliEnvScope Process `
+                -InitialBaseline $driftedBaseline `
+                -PostHealBaseline $cleanLaunchBaseline
+
+            if ($watched.RuntimeStatus -ne 'AutoHealed') {
+                throw ("Expected RuntimeStatus=AutoHealed, got {0} ({1})" -f $watched.RuntimeStatus, $watched.RuntimeAlertMessage)
+            }
+            if ($watched.InitialScoreBeforeHeal -ne 33 -or $watched.Score -ne 8 -or -not $watched.PassedGate) {
+                throw ("Expected score heal 33 -> 8, got {0} -> {1}" -f $watched.InitialScoreBeforeHeal, $watched.Score)
+            }
+            if ($watched.AutoHealedItems.Count -ne 3) {
+                throw ("Expected 3 healed items, got {0}: {1}" -f $watched.AutoHealedItems.Count, ($watched.AutoHealedItems -join ', '))
+            }
+            $inetProps = Get-ItemProperty -LiteralPath $tempInetKey
+            if ([int]$inetProps.ProxyEnable -ne 1 -or [string]$inetProps.ProxyServer -ne '127.0.0.1:10808' -or $inetProps.PSObject.Properties['AutoConfigURL']) {
+                throw 'System proxy registry was not properly healed.'
+            }
+            $chromeProps = Get-ItemProperty -LiteralPath (Join-Path $tempPolicyRoot 'Google\Chrome')
+            if ([string]$chromeProps.WebRtcIPHandling -ne 'disable_non_proxied_udp') {
+                throw 'Browser policy registry was not silently healed.'
+            }
+        } finally {
+            foreach ($k in $savedProcEnv.Keys) {
+                [Environment]::SetEnvironmentVariable($k, $savedProcEnv[$k], 'Process')
+            }
+            if (Test-Path -LiteralPath $testStatePath) { Remove-Item -LiteralPath $testStatePath -Force -ErrorAction SilentlyContinue }
+            if (Test-Path -LiteralPath $tempRegRoot) { Remove-Item -LiteralPath $tempRegRoot -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+    }
+
+    Pass 'dynamic-runtime-watch-strict-terminate-vs-warn' {
+        $testStatePath2 = Join-Path $PSScriptRoot ('private\test-netenv-state2-' + [guid]::NewGuid().ToString('N') + '.json')
+        try {
+            $deadProxyBaseline = [pscustomobject]@{
+                SystemProxy     = [pscustomobject]@{ ProxyEnable = $false; ParsedPort = $null; AutoConfigURL = '' }
+                Listeners       = @()
+                BrowserPolicies = @([pscustomobject]@{ Browser = 'Chrome'; Installed = $true; FullyProtected = $true })
+                CliStatus       = [pscustomobject]@{ UserEnv = [pscustomobject]@{ HTTPS_PROXY = 'http://127.0.0.1:10808' }; ProcessEnv = [pscustomobject]@{ HTTPS_PROXY = 'http://127.0.0.1:10808' } }
+                IPv6Interfaces  = @()
+                TimezoneId      = 'China Standard Time'
+                Connectivity    = $null
+            }
+            $mockClaude = @([pscustomobject]@{ Id = 99991; Name = 'Claude'; Path = 'C:\Program Files\WindowsApps\Claude_5.11492.5.0\app\Claude.exe'; IsMock = $true })
+
+            # 1) In AutoHealAndWarn mode: unhealable proxy outage breaches gate (Score=62 > 20) and warns, but does NOT kill Claude
+            $null = Set-NetworkEnvRiskConfig -GateEnabled $true -MaxRiskScore 20 -RuntimeEnforcementMode AutoHealAndWarn -ConfigPath $testRiskCfg
+            $warnRes = Invoke-NetworkEnvRuntimeWatch `
+                -ConfigPath $testRiskCfg `
+                -StatePath $testStatePath2 `
+                -InitialBaseline $deadProxyBaseline `
+                -MockProtectedProcesses $mockClaude
+            if ($warnRes.RuntimeStatus -ne 'Breached' -or $warnRes.TerminatedProtectedProcesses) {
+                throw ("Expected Breached without termination in AutoHealAndWarn, got Status={0} Terminated={1}" -f $warnRes.RuntimeStatus, $warnRes.TerminatedProtectedProcesses)
+            }
+
+            # 2) In StrictTerminate mode: unhealable proxy outage terminates protected Claude process
+            $null = Set-NetworkEnvRiskConfig -GateEnabled $true -MaxRiskScore 20 -RuntimeEnforcementMode StrictTerminate -ConfigPath $testRiskCfg
+            $termRes = Invoke-NetworkEnvRuntimeWatch `
+                -ConfigPath $testRiskCfg `
+                -StatePath $testStatePath2 `
+                -InitialBaseline $deadProxyBaseline `
+                -MockProtectedProcesses $mockClaude
+            if ($termRes.RuntimeStatus -ne 'TerminatedOnBreach' -or -not $termRes.TerminatedProtectedProcesses -or $termRes.TerminatedProcessCount -ne 1) {
+                throw ("Expected TerminatedOnBreach with 1 terminated process in StrictTerminate, got Status={0} Count={1}" -f $termRes.RuntimeStatus, $termRes.TerminatedProcessCount)
+            }
+        } finally {
+            if (Test-Path -LiteralPath $testStatePath2) { Remove-Item -LiteralPath $testStatePath2 -Force -ErrorAction SilentlyContinue }
+        }
+    }
 } finally {
     if (Test-Path -LiteralPath $testRiskCfg) { Remove-Item -LiteralPath $testRiskCfg -Force -ErrorAction SilentlyContinue }
 }

@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param()
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
@@ -56,6 +56,13 @@ function Invoke-CimMethod {param($InputObject,$MethodName);[pscustomobject]@{Ret
 $identified=@(Get-GuardSupervisorProcessIdentities $state)
 if($identified.Count -ne 1 -or $identified[0].Kind -ne 'Worker'){throw 'Date-object identity with fractional command-line timestamp was not matched.'}
 $checks.Add('worker-date-object-fractional-start-matched')
+$global:LifecycleProcessExited=$false
+function Get-Process {param($Id,$ErrorAction);[pscustomobject]@{StartTime=[datetime]'2026-10-06T01:02:04.7654321Z';HasExited=$global:LifecycleProcessExited}}
+function Invoke-CimMethod {param($InputObject,$MethodName);if($global:LifecycleProcessExited){throw '找不到 '};[pscustomobject]@{ReturnValue=0;Sid='S-1-5-21-fixture'}}
+$global:LifecycleProcessExited=$true
+if(@(Get-GuardSupervisorProcessIdentities $state).Count -ne 0){throw 'Exited worker during WMI GetOwnerSid was not ignored.'}
+$global:LifecycleProcessExited=$false
+$checks.Add('exited-worker-wmi-not-found-ignored')
 $global:LifecycleWorkerCommand=$global:LifecycleWorkerCommand.Replace('03.1234567Z','03.1234568Z')
 Require-Rejection 'worker-start-ticks-mismatch' {Get-GuardSupervisorProcessIdentities $state}
 $global:LifecycleWorkerCommand=$global:LifecycleWorkerCommand.Replace('03.1234568Z','03.1234567Z')+' --unexpected'

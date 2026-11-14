@@ -1,20 +1,26 @@
 ﻿[CmdletBinding()]
 param(
     [switch]$CheckConnectivity,
+    [switch]$RuntimeWatch,
     [ValidateRange(0, 100)][int]$SetThreshold = -1,
     [ValidateSet('Unchanged', 'Enable', 'Disable')][string]$Gate = 'Unchanged',
+    [ValidateSet('', 'AutoHealAndWarn', 'StrictTerminate', 'WarnOnly', 'Disabled')][string]$RuntimeMode = '',
     [switch]$Json
 )
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard-NetworkEnv.psm1') -Force
 
-if ($SetThreshold -ge 0 -or $Gate -ne 'Unchanged') {
+if ($SetThreshold -ge 0 -or $Gate -ne 'Unchanged' -or $RuntimeMode) {
     $gateBool = switch ($Gate) { 'Enable' { $true } 'Disable' { $false } default { $null } }
     $threshArg = if ($SetThreshold -ge 0) { $SetThreshold } else { $null }
-    $null = Set-NetworkEnvRiskConfig -GateEnabled $gateBool -MaxRiskScore $threshArg
+    $null = Set-NetworkEnvRiskConfig -GateEnabled $gateBool -MaxRiskScore $threshArg -RuntimeEnforcementMode $RuntimeMode
 }
 
-$risk = Get-NetworkEnvRiskScore -CheckConnectivity:$CheckConnectivity
+$risk = if ($RuntimeWatch) {
+    Invoke-NetworkEnvRuntimeWatch -CheckConnectivity:$CheckConnectivity
+} else {
+    Get-NetworkEnvRiskScore -CheckConnectivity:$CheckConnectivity
+}
 $baseline = $risk.Baseline
 if ($Json) {
     [pscustomobject]@{
@@ -23,6 +29,9 @@ if ($Json) {
     } | ConvertTo-Json -Depth 12
 } else {
     Write-Output $risk.Summary
+    if ($risk.RuntimeAlertMessage) {
+        Write-Output ("动态巡检: [{0}] {1}" -f $risk.RuntimeStatus, $risk.RuntimeAlertMessage)
+    }
     Write-Output ''
     Write-Output $baseline.SummaryText
     Write-Output ''

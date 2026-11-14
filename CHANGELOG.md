@@ -1,6 +1,20 @@
 # 更新记录
 
-当前版本 **v1.6.1 · 第 24 次源码迭代**。
+当前版本 **v1.7.0 · 第 26 次源码迭代**。
+
+## v1.7.0 (2026-11-14)
+
+针对启动前风险评分通过后、运行期间因共享代理掉线、系统代理/PAC 被劫持、CLI 代理环境变量被清空、浏览器防泄露策略被覆盖或网络切换导致非 TUN 风险分动态升高的场景，新增**运行期动态网络风险巡检、静默自愈与分级阻断**能力：
+
+- **动态风险巡检与可修复项静默自愈**（`ClaudeGuard-NetworkEnv.psm1`、`Get-ClaudeNetworkEnv.ps1`、`ClaudeGuard-UiBridge.ps1`）：新增 `Save-NetworkEnvRuntimeBaseline`、`Repair-NetworkEnvSilentItems`、`Get-NetworkEnvActiveProtectedProcesses`、`Stop-NetworkEnvProtectedProcesses` 与 `Invoke-NetworkEnvRuntimeWatch`（持久化基线与漂移状态至 `private\network-env-runtime-state.json`）；巡检发现系统代理关闭/PAC 冲突、CLI 环境变量缺失或可写注册表下的 Chrome/Edge 防泄露策略丢失时，在不弹出 UAC 打断会话的前提下自动静默恢复并重算风险分。
+- **分级运行期风控策略与 UI 实时联动**（`ClaudeGuardLauncher.cs` `v1.7.0` / `1.7.0.0`）：扩展 `network-env-config.json`（Schema v2）与主界面门禁卡片，新增运行期策略切换器（`动态:自愈+告警`、`动态:超限停Claude`、`动态:仅预警`、`动态:关闭`）与后台定时巡检器（默认 25s 周期，且在检测到 Claude 启动瞬间立即复核）；当静默自愈后风险分仍超出门限时，按所选策略实时高亮告警或立即终止受保护的 Claude / 本地 Code 进程以阻断暴露会话，并在网络优化弹窗新增「立即动态巡检」动作。
+
+## v1.6.2 (2026-11-14)
+
+修复点击「安装并维护」或「维护版本」暂停后台守护期间因 WMI 进程退出竞态报错 `找不到 `，以及桌面更新内嵌维护回滚时 `Set-CodeAccessOnlyAcl` 作用域缺失导致中断的问题：
+
+- **守护进程退出 WMI 竞态收敛**（`ClaudeGuard-Lifecycle.ps1`、`Test-ClaudeLifecycle.ps1`）：`Get-GuardSupervisorProcessIdentities`、`Test-GuardSupervisorProcessIdentity` 与 `Stop-GuardSupervisorProcessIdentity` 在调用 `Invoke-CimMethod GetOwnerSid` 及读取 `StartTime` 时增加退出态复核与短暂退出等待（300ms），避免 `Stop-ScheduledTask` 终止 `ClaudeSupervisorHost.exe` 与作业树期间 WMI 对已退出进程抛出 `WBEM_E_NOT_FOUND`（中文系统报错 `找不到 `）。
+- **维护回滚权限模块自举导入与恢复后包复用**（`ClaudeGuard-Lifecycle.ps1`、`Invoke-ClaudeDesktopUpdate.ps1`、`ClaudeGuard-DesktopUpdate.psm1`）：`Restore-GuardCodeMigrationPermissions` 在 `ClaudeGuard` 模块作用域内按需导入 `ClaudeCodeGate.psm1`，同时在 `Invoke-ClaudeDesktopUpdate.ps1` 顶层导入 `ClaudeCodeGate.psm1`，彻底消除「安装并维护」回滚时 `Set-CodeAccessOnlyAcl` 未识别异常；`New-ClaudeDesktopUpdateRequest` 允许 `MaintenanceRecovered` 状态的已核验官方安装包直接接续重试安装，无需重复下载。
 
 ## v1.6.1 (2026-11-14)
 

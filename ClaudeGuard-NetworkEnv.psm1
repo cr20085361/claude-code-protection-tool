@@ -904,16 +904,24 @@ function Get-NetworkEnvDefaultRiskConfigPath {
     Get-NetworkEnvPath 'private\network-env-config.json'
 }
 
+function Get-NetworkEnvDefaultRuntimeStatePath {
+    Get-NetworkEnvPath 'private\network-env-runtime-state.json'
+}
+
 function Get-NetworkEnvRiskConfig {
     [CmdletBinding()]
     param([string]$ConfigPath = (Get-NetworkEnvDefaultRiskConfigPath))
 
     $defaults = [ordered]@{
-        SchemaVersion             = 1
+        SchemaVersion             = 2
         GateEnabled               = $true
         MaxRiskScore              = 20
         CheckConnectivityOnLaunch = $true
         ProxyMode                 = 'Auto'
+        DynamicWatchEnabled       = $true
+        WatchIntervalSeconds      = 25
+        AutoHealOnDegrade         = $true
+        RuntimeEnforcementMode    = 'AutoHealAndWarn'
         UpdatedAt                 = $null
     }
     $saved = Read-NetworkEnvJson $ConfigPath
@@ -927,6 +935,18 @@ function Get-NetworkEnvRiskConfig {
         if ($saved.PSObject.Properties['ProxyMode'] -and [string]$saved.ProxyMode -in @('Auto', 'Dedicated', 'Shared')) {
             $defaults.ProxyMode = [string]$saved.ProxyMode
         }
+        if ($null -ne $saved.PSObject.Properties['DynamicWatchEnabled']) { $defaults.DynamicWatchEnabled = [bool]$saved.DynamicWatchEnabled }
+        if ($null -ne $saved.PSObject.Properties['WatchIntervalSeconds']) {
+            $w = [int]$saved.WatchIntervalSeconds
+            $defaults.WatchIntervalSeconds = [Math]::Max(10, [Math]::Min(300, $w))
+        }
+        if ($null -ne $saved.PSObject.Properties['AutoHealOnDegrade']) { $defaults.AutoHealOnDegrade = [bool]$saved.AutoHealOnDegrade }
+        if ($saved.PSObject.Properties['RuntimeEnforcementMode'] -and [string]$saved.RuntimeEnforcementMode -in @('AutoHealAndWarn', 'StrictTerminate', 'WarnOnly', 'Disabled')) {
+            $defaults.RuntimeEnforcementMode = [string]$saved.RuntimeEnforcementMode
+        }
+        if ($defaults.RuntimeEnforcementMode -eq 'Disabled') {
+            $defaults.DynamicWatchEnabled = $false
+        }
         if ($saved.PSObject.Properties['UpdatedAt']) { $defaults.UpdatedAt = $saved.UpdatedAt }
     }
     [pscustomobject]@{
@@ -935,6 +955,10 @@ function Get-NetworkEnvRiskConfig {
         MaxRiskScore              = $defaults.MaxRiskScore
         CheckConnectivityOnLaunch = $defaults.CheckConnectivityOnLaunch
         ProxyMode                 = $defaults.ProxyMode
+        DynamicWatchEnabled       = $defaults.DynamicWatchEnabled
+        WatchIntervalSeconds      = $defaults.WatchIntervalSeconds
+        AutoHealOnDegrade         = $defaults.AutoHealOnDegrade
+        RuntimeEnforcementMode    = $defaults.RuntimeEnforcementMode
         UpdatedAt                 = $defaults.UpdatedAt
         ConfigPath                = $ConfigPath
     }
@@ -947,6 +971,10 @@ function Set-NetworkEnvRiskConfig {
         [Nullable[int]]$MaxRiskScore,
         [Nullable[bool]]$CheckConnectivityOnLaunch,
         [ValidateSet('', 'Auto', 'Dedicated', 'Shared')][string]$ProxyMode = '',
+        [Nullable[bool]]$DynamicWatchEnabled,
+        [Nullable[int]]$WatchIntervalSeconds,
+        [Nullable[bool]]$AutoHealOnDegrade,
+        [ValidateSet('', 'AutoHealAndWarn', 'StrictTerminate', 'WarnOnly', 'Disabled')][string]$RuntimeEnforcementMode = '',
         [string]$ConfigPath = (Get-NetworkEnvDefaultRiskConfigPath)
     )
 
@@ -958,13 +986,44 @@ function Set-NetworkEnvRiskConfig {
     } else { [int]$current.MaxRiskScore }
     $nextConn = if ($null -ne $CheckConnectivityOnLaunch) { [bool]$CheckConnectivityOnLaunch } else { [bool]$current.CheckConnectivityOnLaunch }
     $nextMode = if ($ProxyMode) { $ProxyMode } else { [string]$current.ProxyMode }
+    $nextEnforce = if ($RuntimeEnforcementMode) { $RuntimeEnforcementMode } else { [string]$current.RuntimeEnforcementMode }
+    $nextWatch = if ($null -ne $DynamicWatchEnabled) {
+        [bool]$DynamicWatchEnabled
+    } elseif ($RuntimeEnforcementMode) {
+        ($RuntimeEnforcementMode -ne 'Disabled')
+    } else {
+        [bool]$current.DynamicWatchEnabled
+    }
+    if (-not $nextWatch -and -not $RuntimeEnforcementMode -and $null -ne $DynamicWatchEnabled) {
+        $nextEnforce = 'Disabled'
+    } elseif ($nextWatch -and $nextEnforce -eq 'Disabled') {
+        $nextEnforce = 'AutoHealAndWarn'
+    }
+    $nextInterval = if ($null -ne $WatchIntervalSeconds) {
+        [Math]::Max(10, [Math]::Min(300, [int]$WatchIntervalSeconds))
+    } else {
+        [int]$current.WatchIntervalSeconds
+    }
+    $nextHeal = if ($null -ne $AutoHealOnDegrade) {
+        [bool]$AutoHealOnDegrade
+    } elseif ($nextEnforce -in @('AutoHealAndWarn', 'StrictTerminate')) {
+        $true
+    } elseif ($nextEnforce -eq 'WarnOnly') {
+        $false
+    } else {
+        [bool]$current.AutoHealOnDegrade
+    }
 
     $payload = [ordered]@{
-        SchemaVersion             = 1
+        SchemaVersion             = 2
         GateEnabled               = $nextGate
         MaxRiskScore              = $nextMax
         CheckConnectivityOnLaunch = $nextConn
         ProxyMode                 = $nextMode
+        DynamicWatchEnabled       = $nextWatch
+        WatchIntervalSeconds      = $nextInterval
+        AutoHealOnDegrade         = $nextHeal
+        RuntimeEnforcementMode    = $nextEnforce
         UpdatedAt                 = (Get-Date -Format o)
     }
     Write-NetworkEnvJson $ConfigPath $payload
@@ -1112,19 +1171,29 @@ function Get-NetworkEnvRiskScore {
     if ($topRisks.Count -gt 0) { $summary += " | 主要扣分: " + ($topRisks -join '、') }
 
     [pscustomobject]@{
-        Time         = (Get-Date -Format o)
-        Score        = $score
-        Grade        = $grade
-        Threshold    = $cfg.MaxRiskScore
-        GateEnabled  = $cfg.GateEnabled
-        PassedGate   = $passedGate
-        ProxyMode    = $effectiveMode
-        SelectedPort = if ($selectedProxy) { $selectedProxy.Port } else { $null }
-        ConfigPath   = $cfg.ConfigPath
-        TopRisks     = $topRisks
-        Summary      = $summary
-        Breakdown    = @($items)
-        Baseline     = $b
+        Time                         = (Get-Date -Format o)
+        Score                        = $score
+        Grade                        = $grade
+        Threshold                    = $cfg.MaxRiskScore
+        GateEnabled                  = $cfg.GateEnabled
+        PassedGate                   = $passedGate
+        ProxyMode                    = $effectiveMode
+        SelectedPort                 = if ($selectedProxy) { $selectedProxy.Port } else { $null }
+        ConfigPath                   = $cfg.ConfigPath
+        DynamicWatchEnabled          = $cfg.DynamicWatchEnabled
+        WatchIntervalSeconds         = $cfg.WatchIntervalSeconds
+        AutoHealOnDegrade            = $cfg.AutoHealOnDegrade
+        RuntimeEnforcementMode       = $cfg.RuntimeEnforcementMode
+        RuntimeStatus                = if (-not $cfg.DynamicWatchEnabled -or $cfg.RuntimeEnforcementMode -eq 'Disabled') { 'Disabled' } elseif (-not $passedGate) { 'Breached' } else { 'Healthy' }
+        RuntimeAlertMessage          = ''
+        AutoHealedItems              = @()
+        DegradedItems                = @()
+        TerminatedProtectedProcesses = $false
+        TerminatedProcessCount       = 0
+        TopRisks                     = $topRisks
+        Summary                      = $summary
+        Breakdown                    = @($items)
+        Baseline                     = $b
     }
 }
 
@@ -1255,6 +1324,385 @@ function Invoke-NetworkEnvElevatedBrowserPolicy {
         if ($proc) { $proc.Dispose() }
         if (Test-Path -LiteralPath $resultFile) { Remove-Item -LiteralPath $resultFile -Force -ErrorAction SilentlyContinue }
     }
+}
+
+function Repair-NetworkEnvSilentItems {
+    [CmdletBinding()]
+    param(
+        $RiskReport,
+        [string]$ConfigPath = (Get-NetworkEnvDefaultRiskConfigPath),
+        [ValidateSet('', 'Auto', 'Dedicated', 'Shared')][string]$ProxyMode = '',
+        [string]$RegistryRoot = 'HKCU:\Software\Policies',
+        [string]$InternetSettingsKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings',
+        [ValidateSet('User', 'Process')][string]$CliEnvScope = 'User'
+    )
+
+    if (-not $RiskReport) {
+        $RiskReport = Get-NetworkEnvRiskScore -ConfigPath $ConfigPath -ProxyMode:$ProxyMode
+    }
+    $healedItems = [System.Collections.Generic.List[string]]::new()
+    $listeners = @(if ($RiskReport.Baseline -and $RiskReport.Baseline.PSObject.Properties['Listeners'] -and $RiskReport.Baseline.Listeners) {
+        $RiskReport.Baseline.Listeners | Where-Object { $_.TcpAccepting }
+    })
+    $activePort = 0
+    if ($RiskReport.SelectedPort -and [int]$RiskReport.SelectedPort -gt 0) {
+        $activePort = [int]$RiskReport.SelectedPort
+    } elseif ($listeners.Count -gt 0) {
+        $activePort = [int]$listeners[0].Port
+    }
+
+    $cliItem = $RiskReport.Breakdown | Where-Object { $_.Id -eq 'CliProxyEnv' } | Select-Object -First 1
+    if ($cliItem -and [int]$cliItem.Points -gt 0 -and $activePort -gt 0) {
+        try {
+            $effectiveScope = if ($CliEnvScope -eq 'Process') { 'Session' } else { $CliEnvScope }
+            $null = Set-NetworkEnvCliProxy -Port $activePort -Scope $effectiveScope
+            $healedItems.Add(("CLI 代理环境变量(127.0.0.1:{0})" -f $activePort))
+        } catch {
+            Write-Verbose "Silent CLI proxy heal failed: $($_.Exception.Message)"
+        }
+    }
+
+    $sysProxyItem = $RiskReport.Breakdown | Where-Object { $_.Id -eq 'SystemProxyAndPac' } | Select-Object -First 1
+    if ($sysProxyItem -and [int]$sysProxyItem.Points -gt 0 -and $activePort -gt 0) {
+        try {
+            if (-not (Test-Path -LiteralPath $InternetSettingsKey)) {
+                $null = New-Item -Path $InternetSettingsKey -Force
+            }
+            Set-ItemProperty -LiteralPath $InternetSettingsKey -Name 'ProxyEnable' -Value 1 -Type DWord -ErrorAction Stop
+            Set-ItemProperty -LiteralPath $InternetSettingsKey -Name 'ProxyServer' -Value ("127.0.0.1:{0}" -f $activePort) -Type String -ErrorAction Stop
+            $existingPac = Get-ItemProperty -LiteralPath $InternetSettingsKey -Name 'AutoConfigURL' -ErrorAction SilentlyContinue
+            if ($null -ne $existingPac -and $existingPac.PSObject.Properties['AutoConfigURL']) {
+                Remove-ItemProperty -LiteralPath $InternetSettingsKey -Name 'AutoConfigURL' -ErrorAction SilentlyContinue
+            }
+            $healedItems.Add(("系统代理与 PAC(127.0.0.1:{0})" -f $activePort))
+        } catch {
+            Write-Verbose "Silent system proxy heal failed: $($_.Exception.Message)"
+        }
+    }
+
+    $browserItem = $RiskReport.Breakdown | Where-Object { $_.Id -eq 'BrowserLeakPolicy' } | Select-Object -First 1
+    if ($browserItem -and [int]$browserItem.Points -gt 0) {
+        try {
+            if (Test-NetworkEnvPolicyRegistryWritable -RegistryRoot $RegistryRoot) {
+                if ($RegistryRoot -eq 'HKCU:\Software\Policies') {
+                    $null = Enable-NetworkEnvBrowserPolicy -Browsers @('Chrome', 'Edge') -RegistryRoot $RegistryRoot
+                } else {
+                    $tmpBackup = Get-NetworkEnvPath ('private\test-policy-bkp-' + [guid]::NewGuid().ToString('N') + '.json')
+                    try {
+                        $null = Enable-NetworkEnvBrowserPolicy -Browsers @('Chrome', 'Edge') -RegistryRoot $RegistryRoot -BackupFile $tmpBackup
+                    } finally {
+                        if (Test-Path -LiteralPath $tmpBackup) { Remove-Item -LiteralPath $tmpBackup -Force -ErrorAction SilentlyContinue }
+                    }
+                }
+                $healedItems.Add('Chrome/Edge 防泄露策略')
+            }
+        } catch {
+            Write-Verbose "Silent browser policy heal failed: $($_.Exception.Message)"
+        }
+    }
+
+    [pscustomobject]@{
+        Healed      = ($healedItems.Count -gt 0)
+        HealedItems = @($healedItems)
+        ActivePort  = if ($activePort -gt 0) { $activePort } else { $null }
+    }
+}
+
+function Get-NetworkEnvActiveProtectedProcesses {
+    [CmdletBinding()]
+    param(
+        [string]$DeploymentPath = (Get-NetworkEnvPath 'private\deployment.json'),
+        $MockProcesses = $null
+    )
+
+    if ($null -ne $MockProcesses) {
+        return @($MockProcesses)
+    }
+
+    $dep = Read-NetworkEnvJson $DeploymentPath
+    $desktopExe = ''
+    $codePaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    if ($dep) {
+        if ($dep.PSObject.Properties['Desktop'] -and $dep.Desktop -and $dep.Desktop.PSObject.Properties['Path'] -and $dep.Desktop.Path) {
+            $desktopExe = [string]$dep.Desktop.Path
+        } elseif ($dep.PSObject.Properties['DesktopExecutablePath'] -and $dep.DesktopExecutablePath) {
+            $desktopExe = [string]$dep.DesktopExecutablePath
+        }
+        if ($dep.PSObject.Properties['CodeGate'] -and $dep.CodeGate) {
+            if ($dep.CodeGate.PSObject.Properties['Path'] -and $dep.CodeGate.Path) {
+                [void]$codePaths.Add([string]$dep.CodeGate.Path)
+            }
+            if ($dep.CodeGate.PSObject.Properties['Paths'] -and $dep.CodeGate.Paths) {
+                foreach ($cp in @($dep.CodeGate.Paths)) {
+                    if ($cp) { [void]$codePaths.Add([string]$cp) }
+                }
+            }
+        }
+        if ($dep.PSObject.Properties['ApprovedCodePath'] -and $dep.ApprovedCodePath) {
+            [void]$codePaths.Add([string]$dep.ApprovedCodePath)
+        }
+        if ($dep.PSObject.Properties['CodePaths'] -and $dep.CodePaths) {
+            foreach ($cp in @($dep.CodePaths)) {
+                if ($cp) { [void]$codePaths.Add([string]$cp) }
+            }
+        }
+    }
+
+    $results = [System.Collections.Generic.List[object]]::new()
+    foreach ($p in @(Get-Process -Name 'Claude', 'claude' -ErrorAction SilentlyContinue)) {
+        $pPath = ''
+        try { $pPath = [string]$p.Path } catch { $pPath = '' }
+        $matched = $false
+        if ($pPath) {
+            if ($desktopExe -and [string]::Equals($pPath, $desktopExe, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $matched = $true
+            } elseif ($codePaths.Contains($pPath)) {
+                $matched = $true
+            } elseif ($pPath -match 'WindowsApps\\Claude_' -or $pPath -match '\\\.local\\bin\\claude\.exe$' -or $pPath -match 'claude-code') {
+                $matched = $true
+            }
+        } else {
+            if ($p.ProcessName -ieq 'Claude') {
+                $matched = $true
+            }
+        }
+        if ($matched) {
+            $results.Add([pscustomobject]@{
+                Id     = [int]$p.Id
+                Name   = [string]$p.ProcessName
+                Path   = $pPath
+                IsMock = $false
+            })
+        }
+    }
+    @($results)
+}
+
+function Stop-NetworkEnvProtectedProcesses {
+    [CmdletBinding()]
+    param(
+        $Processes = $null
+    )
+
+    $targets = if ($null -ne $Processes) { @($Processes) } else { @(Get-NetworkEnvActiveProtectedProcesses) }
+    $stopped = [System.Collections.Generic.List[object]]::new()
+    foreach ($proc in $targets) {
+        if (-not $proc) { continue }
+        $isMock = ($proc.PSObject.Properties['IsMock'] -and [bool]$proc.IsMock)
+        if ($isMock) {
+            $stopped.Add($proc)
+            continue
+        }
+        try {
+            Stop-Process -Id ([int]$proc.Id) -Force -ErrorAction Stop
+            $stopped.Add($proc)
+        } catch {
+            Write-Verbose "Failed to stop process $($proc.Id): $($_.Exception.Message)"
+        }
+    }
+    @($stopped)
+}
+
+function Save-NetworkEnvRuntimeBaseline {
+    [CmdletBinding()]
+    param(
+        $RiskReport,
+        [string]$StatePath = (Get-NetworkEnvDefaultRuntimeStatePath)
+    )
+
+    if (-not $RiskReport) {
+        $RiskReport = Get-NetworkEnvRiskScore
+    }
+    $statePayload = [ordered]@{
+        SchemaVersion          = 1
+        UpdatedAt              = (Get-Date -Format o)
+        LaunchBaselineScore    = [int]$RiskReport.Score
+        LastScore              = [int]$RiskReport.Score
+        LastGrade              = [string]$RiskReport.Grade
+        LastPassedGate         = [bool]$RiskReport.PassedGate
+        RuntimeStatus          = 'Healthy'
+        RuntimeAlertMessage    = ("启动基线已建立 ({0}/100 · {1} 级)" -f $RiskReport.Score, $RiskReport.Grade)
+        AutoHealedItems        = @()
+        DegradedItems          = @()
+        TerminatedProcessCount = 0
+        LastBreakdown          = @($RiskReport.Breakdown | ForEach-Object {
+            [ordered]@{
+                Id     = [string]$_.Id
+                Label  = [string]$_.Label
+                Points = [int]$_.Points
+                Status = [string]$_.Status
+            }
+        })
+    }
+    Write-NetworkEnvJson $StatePath $statePayload
+    $RiskReport
+}
+
+function Invoke-NetworkEnvRuntimeWatch {
+    [CmdletBinding()]
+    param(
+        [switch]$CheckConnectivity,
+        [ValidateSet('', 'Auto', 'Dedicated', 'Shared')][string]$ProxyMode = '',
+        [string]$ConfigPath = (Get-NetworkEnvDefaultRiskConfigPath),
+        [string]$StatePath = (Get-NetworkEnvDefaultRuntimeStatePath),
+        [string]$RegistryRoot = 'HKCU:\Software\Policies',
+        [string]$InternetSettingsKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings',
+        [ValidateSet('User', 'Process')][string]$CliEnvScope = 'User',
+        $InitialBaseline = $null,
+        $PostHealBaseline = $null,
+        $MockProtectedProcesses = $null
+    )
+
+    $cfg = Get-NetworkEnvRiskConfig -ConfigPath $ConfigPath
+    $prevState = Read-NetworkEnvJson $StatePath
+    $initialReport = Get-NetworkEnvRiskScore -CheckConnectivity:$CheckConnectivity -ProxyMode:$ProxyMode -ConfigPath $ConfigPath -Baseline $InitialBaseline
+
+    $prevPointsMap = @{}
+    if ($prevState -and $prevState.PSObject.Properties['LastBreakdown'] -and $prevState.LastBreakdown) {
+        foreach ($bItem in @($prevState.LastBreakdown)) {
+            if ($bItem -and $bItem.Id) {
+                $prevPointsMap[[string]$bItem.Id] = [int]$bItem.Points
+            }
+        }
+    }
+
+    $degradedBeforeHeal = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in @($initialReport.Breakdown)) {
+        if (-not $item -or $item.Id -eq 'BaseNode') { continue }
+        $curPts = [int]$item.Points
+        if ($prevPointsMap.ContainsKey([string]$item.Id)) {
+            $oldPts = [int]$prevPointsMap[[string]$item.Id]
+            if ($curPts -gt $oldPts) {
+                $degradedBeforeHeal.Add(("{0}({1}->+{2})" -f $item.Label, $oldPts, $curPts))
+            }
+        }
+    }
+
+    $healablePoints = @($initialReport.Breakdown | Where-Object {
+        $_.Id -in @('CliProxyEnv', 'SystemProxyAndPac', 'BrowserLeakPolicy') -and [int]$_.Points -gt 0
+    }).Count
+
+    $healRes = [pscustomobject]@{
+        Healed      = $false
+        HealedItems = @()
+        ActivePort  = $initialReport.SelectedPort
+    }
+
+    $shouldAttemptHeal = (
+        $cfg.DynamicWatchEnabled -and
+        $cfg.AutoHealOnDegrade -and
+        $cfg.RuntimeEnforcementMode -in @('AutoHealAndWarn', 'StrictTerminate') -and
+        ($healablePoints -gt 0) -and
+        ((-not $initialReport.PassedGate) -or ($degradedBeforeHeal.Count -gt 0) -or $cfg.GateEnabled)
+    )
+
+    if ($shouldAttemptHeal) {
+        $healRes = Repair-NetworkEnvSilentItems `
+            -RiskReport $initialReport `
+            -ConfigPath $ConfigPath `
+            -ProxyMode $ProxyMode `
+            -RegistryRoot $RegistryRoot `
+            -InternetSettingsKey $InternetSettingsKey `
+            -CliEnvScope $CliEnvScope
+    }
+
+    $finalReport = if ($healRes.Healed) {
+        Get-NetworkEnvRiskScore -CheckConnectivity:$CheckConnectivity -ProxyMode:$ProxyMode -ConfigPath $ConfigPath -Baseline $PostHealBaseline
+    } else {
+        $initialReport
+    }
+
+    $degradedAfterHeal = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in @($finalReport.Breakdown)) {
+        if (-not $item -or $item.Id -eq 'BaseNode') { continue }
+        $curPts = [int]$item.Points
+        if ($prevPointsMap.ContainsKey([string]$item.Id)) {
+            $oldPts = [int]$prevPointsMap[[string]$item.Id]
+            if ($curPts -gt $oldPts) {
+                $degradedAfterHeal.Add(("{0}({1}->+{2})" -f $item.Label, $oldPts, $curPts))
+            }
+        }
+    }
+
+    $activeProcs = @(Get-NetworkEnvActiveProtectedProcesses -MockProcesses $MockProtectedProcesses)
+    $protectedRunning = ($activeProcs.Count -gt 0)
+    $runtimeBreached = [bool]($finalReport.GateEnabled -and (-not $finalReport.PassedGate))
+    $terminatedProcs = @()
+
+    if ($cfg.DynamicWatchEnabled -and $runtimeBreached -and $protectedRunning -and $cfg.RuntimeEnforcementMode -eq 'StrictTerminate') {
+        $terminatedProcs = @(Stop-NetworkEnvProtectedProcesses -Processes $activeProcs)
+    }
+
+    $prevScore = if ($prevState -and $null -ne $prevState.PSObject.Properties['LastScore']) { [int]$prevState.LastScore } else { [int]$initialReport.Score }
+    $launchScore = if ($prevState -and $null -ne $prevState.PSObject.Properties['LaunchBaselineScore']) { [int]$prevState.LaunchBaselineScore } else { [int]$finalReport.Score }
+    $scoreDelta = [int]$finalReport.Score - $prevScore
+
+    $runtimeStatus = 'Healthy'
+    $runtimeAlertMessage = ''
+    if (-not $cfg.DynamicWatchEnabled -or $cfg.RuntimeEnforcementMode -eq 'Disabled') {
+        $runtimeStatus = 'Disabled'
+        $runtimeAlertMessage = '动态风险巡检已关闭'
+    } elseif ($runtimeBreached) {
+        $topArr = @($finalReport.TopRisks)
+        $riskReasons = if ($topArr.Count -gt 0) { $topArr -join '、' } else { '总风险分超限' }
+        if ($terminatedProcs.Count -gt 0) {
+            $runtimeStatus = 'TerminatedOnBreach'
+            $runtimeAlertMessage = ("动态风控阻断：运行中风险升至 {0}/{1} ({2} 级)，已按策略停止 Claude ({3} 个进程)。原因：{4}" -f $finalReport.Score, $finalReport.Threshold, $finalReport.Grade, $terminatedProcs.Count, $riskReasons)
+        } else {
+            $runtimeStatus = 'Breached'
+            $healNote = if ($healRes.Healed) { ("（已自动修复 {0}，但仍超门限）" -f ($healRes.HealedItems -join '、')) } else { '' }
+            $runtimeAlertMessage = ("动态风险告警：运行中风险升至 {0}/{1} ({2} 级){3}！主要风险：{4}" -f $finalReport.Score, $finalReport.Threshold, $finalReport.Grade, $healNote, $riskReasons)
+        }
+    } elseif ($healRes.Healed) {
+        $runtimeStatus = 'AutoHealed'
+        $runtimeAlertMessage = ("动态自愈完成：检测到漂移（{0} 分 -> {1} 分），已自动恢复 {2}" -f $initialReport.Score, $finalReport.Score, ($healRes.HealedItems -join '、'))
+    } elseif ($degradedAfterHeal.Count -gt 0) {
+        $runtimeStatus = 'DegradedWithinGate'
+        $runtimeAlertMessage = ("动态波动提示：当前 {0}/{1} 分（仍在门限内），新增扣分：{2}" -f $finalReport.Score, $finalReport.Threshold, ($degradedAfterHeal -join '、'))
+    } else {
+        $runtimeStatus = 'Healthy'
+        $modeLabel = switch ($cfg.RuntimeEnforcementMode) {
+            'StrictTerminate' { '超限停Claude' }
+            'WarnOnly'        { '仅预警' }
+            default           { '自愈+告警' }
+        }
+        $runtimeAlertMessage = ("动态巡检正常 ({0}s · {1})" -f $cfg.WatchIntervalSeconds, $modeLabel)
+    }
+
+    $statePayload = [ordered]@{
+        SchemaVersion          = 1
+        UpdatedAt              = (Get-Date -Format o)
+        LaunchBaselineScore    = $launchScore
+        LastScore              = [int]$finalReport.Score
+        LastGrade              = [string]$finalReport.Grade
+        LastPassedGate         = [bool]$finalReport.PassedGate
+        RuntimeStatus          = $runtimeStatus
+        RuntimeAlertMessage    = $runtimeAlertMessage
+        AutoHealedItems        = @($healRes.HealedItems)
+        DegradedItems          = @($degradedAfterHeal)
+        TerminatedProcessCount = $terminatedProcs.Count
+        LastBreakdown          = @($finalReport.Breakdown | ForEach-Object {
+            [ordered]@{
+                Id     = [string]$_.Id
+                Label  = [string]$_.Label
+                Points = [int]$_.Points
+                Status = [string]$_.Status
+            }
+        })
+    }
+    Write-NetworkEnvJson $StatePath $statePayload
+
+    $finalReport.RuntimeStatus = $runtimeStatus
+    $finalReport.RuntimeAlertMessage = $runtimeAlertMessage
+    $finalReport.AutoHealedItems = @($healRes.HealedItems)
+    $finalReport.DegradedItems = @($degradedAfterHeal)
+    $finalReport.TerminatedProtectedProcesses = ($terminatedProcs.Count -gt 0)
+    $finalReport.TerminatedProcessCount = [int]$terminatedProcs.Count
+    $finalReport | Add-Member -NotePropertyName 'InitialScoreBeforeHeal' -NotePropertyValue ([int]$initialReport.Score) -Force
+    $finalReport | Add-Member -NotePropertyName 'ScoreDelta' -NotePropertyValue $scoreDelta -Force
+    $finalReport | Add-Member -NotePropertyName 'LaunchBaselineScore' -NotePropertyValue $launchScore -Force
+    $finalReport | Add-Member -NotePropertyName 'ProtectedProcessesRunning' -NotePropertyValue $protectedRunning -Force
+    $finalReport
 }
 
 Export-ModuleMember -Function *-NetworkEnv*

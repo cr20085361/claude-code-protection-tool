@@ -1,4 +1,4 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 
 function Get-ClaudeDesktopUpdateArtifact([string]$Root,[string]$Id,[string]$Kind='Operation') {
@@ -193,7 +193,7 @@ function Test-ClaudeDesktopUpdatePreparationRequired {
 function New-ClaudeDesktopUpdateRequest([string]$Root,[string]$Id) {
     $op=Invoke-ClaudeDesktopUpdateLocked {
         $ready=Read-ClaudeDesktopUpdate $Root $Id
-        $retry=$ready -and $ready.Status -eq 'Failed' -and $ready.FailureKind -in @('DesktopUpdateFailed','PackageResourcesInUse','InstallPrecondition') -and $ready.Signature -eq 'Valid' -and $ready.PackageHash -match '^[A-Fa-f0-9]{64}$'
+        $retry=$ready -and $ready.Status -eq 'Failed' -and $ready.FailureKind -in @('DesktopUpdateFailed','PackageResourcesInUse','InstallPrecondition','MaintenanceRecovered') -and $ready.Signature -eq 'Valid' -and $ready.PackageHash -match '^[A-Fa-f0-9]{64}$'
         if(-not $ready -or ($ready.Status -ne 'Ready' -and -not $retry)){throw '请先下载并核验官方安装包，或等待已有安装准备完成。'}
         $self=[Diagnostics.Process]::GetCurrentProcess()
         Set-ClaudeDesktopUpdate $Root $Id @{Status='PreparingInstall';Phase='PreparingInstall';WorkerPid=$PID;WorkerStarted=$self.StartTime.ToUniversalTime().ToString('o');WorkerPath=$self.MainModule.FileName;Message='正在核对退出状态及安装条件，请等待。';FailureKind=$null}
