@@ -2,6 +2,7 @@
 param()
 $ErrorActionPreference='Stop'
 Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard-Runtime.psm1')
 Assert-GuardPolicy
 Assert-GuardFirewall
 Assert-GuardCore
@@ -11,10 +12,10 @@ $desktop=@(Get-GuardDesktopProcesses)
 $main=@($desktop|Where-Object ProcessId -eq $last.Pid)
 if($main.Count -ne 1 -or (Get-Process -Id $last.Pid).StartTime.ToUniversalTime().Ticks -ne ([datetime]$last.ProcessStart).ToUniversalTime().Ticks){throw 'No matching protected Desktop instance.'}
 $code=@(Get-CimInstance Win32_Process|Where-Object {$_.ExecutablePath -in @($d.CodePaths)})
-$python=(Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\python.exe')
+$python=Resolve-GuardReaderPython
 $environments=@()
 foreach($p in @($main)+@($code)) {
-    $json=& $python (Join-Path $PSScriptRoot 'Read-ClaudeProcessEnvironment.py') $p.ProcessId 2>$null
+    $json=& $python -I -S (Join-Path $PSScriptRoot 'Read-ClaudeProcessEnvironment.py') $p.ProcessId 2>$null
     if($LASTEXITCODE -ne 0){throw 'Read-only process environment verification unavailable.'}
     $environments+=($json|ConvertFrom-Json)
 }

@@ -21,7 +21,7 @@ if(-not $ActionId){$ActionId=[guid]::NewGuid().ToString('N')}
 $isNetworkEnvAction=$Action -like 'NetworkEnv*'
 if($Action -ne 'Diagnose' -and -not $isNetworkEnvAction){Register-GuardUiAction $ActionId $Action}
 $deadline=[datetime]::UtcNow.AddSeconds(150)
-$result=[ordered]@{Success=$false;Pending=$false;OperationId=$null;Phase=$null;Message='';Started=$false;SessionVerified=$false;DesktopPid=$null;FailureKind=$null;ApprovedVersion=$null;InstalledVersion=$null;SupervisorStatus=$null;SupervisorVerified=$false;SupervisorTime=$null;SupervisorRunId=$null;ApiTransport=$null;ActionId=$ActionId;NetworkEnv=$null;RiskScore=$null}
+$result=[ordered]@{Success=$false;Pending=$false;OperationId=$null;Phase=$null;Message='';Started=$false;SessionVerified=$false;DesktopPid=$null;RuntimeVerified=$false;FailureKind=$null;ApprovedVersion=$null;InstalledVersion=$null;SupervisorStatus=$null;SupervisorVerified=$false;SupervisorTime=$null;SupervisorRunId=$null;ApiTransport=$null;ActionId=$ActionId;NetworkEnv=$null;RiskScore=$null}
 function Assert-GuardUiRetryWindow($Snapshot,[datetimeoffset]$Now=[datetimeoffset]::UtcNow) {
     # 仅使用已核验身份和时效的快照；不能把旧记录或未知进程当成节点故障。
     if($Snapshot.Ready -or $Snapshot.Kind -notin @('UpstreamUnavailable','Checking')){return}
@@ -192,7 +192,9 @@ try {
     if($Action -in @('Start','Check','Login')){
         $maintenanceState=Get-GuardMaintenanceSnapshot
         if(-not ($maintenanceState.Active -or $maintenanceState.Interrupted -or ($maintenanceState.Operation -and $maintenanceState.Operation.RecoveryRequired))){
-            Assert-GuardUiRetryWindow (Get-GuardSupervisorSnapshot)
+            $currentHealth=Get-GuardSupervisorSnapshot
+            if($currentHealth.Kind -eq 'SafetyHold' -or (Test-Path -LiteralPath (Get-GuardPath 'private\safety-hold.json'))){throw ('SafetyHold: '+$currentHealth.Reason)}
+            Assert-GuardUiRetryWindow $currentHealth
         }
     }
     if($Action -eq 'Update') {
@@ -248,6 +250,8 @@ try {
             $matching=@($existing|Where-Object{$_.ProcessId -eq $last.Pid})
             if($matching.Count -ne 1 -or ([datetime]$last.ProcessStart).ToUniversalTime().Ticks -ne (Get-Process -Id $last.Pid).StartTime.ToUniversalTime().Ticks){throw 'Claude is already running outside the protected launcher.'}
             Assert-GuardDesktopNetwork $last.Pid -DeadlineUtc $deadline
+            Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard-Runtime.psm1')
+            Assert-GuardLaunchedRuntime $last.Pid $last.ProcessStart $deadline
             $result.DesktopPid=$last.Pid
             $result.Message='Claude 已通过安全入口启动。请切换到 Claude 窗口继续。'
         } else {
@@ -255,6 +259,7 @@ try {
             $result.Started=$true
             $result.Message=if($result.SessionVerified){'Claude 已打开。当前版本的本机本地 Code 基础使用验收已完成。'}else{'Claude 已打开。网络防护准备完成；Code 正常会话尚待验证。'}
         }
+        $result.RuntimeVerified=$true
         try{$null=Save-NetworkEnvRuntimeBaseline -RiskReport $riskGate}catch{}
     } elseif($Action -eq 'Login') {
         $m=Get-GuardMaintenanceSnapshot;if($m.Active -or $m.Interrupted -or ($m.Operation -and $m.Operation.RecoveryRequired)){throw 'MaintenanceInterrupted: 维护尚未结束，请先接续维护。'}
@@ -270,6 +275,8 @@ try {
         }finally{if(Test-Path -LiteralPath $linkFile){Remove-Item -LiteralPath $linkFile}}
     } else {
         $m=Get-GuardMaintenanceSnapshot;if($m.Active -or $m.Interrupted -or ($m.Operation -and $m.Operation.RecoveryRequired)){throw 'MaintenanceInterrupted: 维护尚未结束，请先接续维护。'}
+        Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard-Runtime.psm1')
+        $null=Resolve-GuardReaderPython
         Assert-GuardPolicy
         Assert-GuardFirewall
         Start-GuardProxy -DeadlineUtc $deadline
@@ -278,11 +285,14 @@ try {
             $last=Read-GuardJson (Get-GuardPath 'evidence\last-launch.json')
             if(@($existing|Where-Object ProcessId -eq $last.Pid).Count -ne 1 -or (Get-Process -Id $last.Pid).StartTime.ToUniversalTime().Ticks -ne ([datetime]$last.ProcessStart).ToUniversalTime().Ticks){throw 'Claude is already running outside the protected launcher.'}
             Assert-GuardDesktopNetwork $last.Pid -DeadlineUtc $deadline
+            Assert-GuardLaunchedRuntime $last.Pid $last.ProcessStart $deadline
+            $result.RuntimeVerified=$true;$result.DesktopPid=$last.Pid
         }
         Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard-NetworkEnv.psm1') -Force; try{$result.RiskScore=Get-NetworkEnvRiskScore -ProxyMode $ProxyMode}catch{}; $result.Message=if($result.SessionVerified){'固定出口及防护检查通过；当前版本的本机本地 Code 基础使用已验收。'}else{'固定出口、代理、防火墙和新版本执行门槛检查通过。真实 Code 会话验收状态请查看报告。'}
     }
     if($Action -ne 'Update'){
         $snapshot=Get-GuardSupervisorSnapshot
+        if($snapshot.Kind -eq 'SafetyHold'){throw ('SafetyHold: '+$snapshot.Reason)}
         if(-not $snapshot.Ready){throw ('SupervisorUnavailable: '+$snapshot.Reason)}
         if([datetime]::UtcNow -ge $deadline){throw 'SupervisorUnavailable: 本次入口操作超时'}
         $result.SupervisorVerified=$true;$result.SupervisorStatus=$snapshot.Health.Status
@@ -299,7 +309,10 @@ try {
         $result.FailureKind='UpgradeRequired'
         $result.Message='Claude 已自动更新：'+$result.ApprovedVersion+' → '+$result.InstalledVersion+'。新版本防护待迁移，请完全退出 Claude 后点击“维护版本”。'
     }
-    elseif($detail -match 'SafetyHold|safety hold|Fixed egress mismatch'){$result.FailureKind='SafetyHold';$result.Message='出口或运行防护异常，专用网络已暂停。请退出 Claude 后点击“维护版本”，核验完成再使用。'}
+    elseif($detail -match '^RuntimeReaderUnavailable:'){$result.FailureKind='RuntimeReaderUnavailable';$result.Message=$detail.Substring('RuntimeReaderUnavailable: '.Length)}
+    elseif($detail -match '^RuntimeVerificationFailed:'){$result.FailureKind='RuntimeVerificationFailed';$result.Message=if($detail -match 'RuntimeReaderUnavailable|RuntimeEnvironmentUnreadable'){'未能核实客户端的运行环境。请检查 64 位 Python 3 是否可用，并用同一 Windows 账号重新打开安全入口。'}else{'客户端的运行防护检查未通过。请退出 Claude，点击“重新检查”查看当前状态。'}}
+    elseif($detail -match '^RuntimeLaunchIdentityChanged:|^RuntimeVerificationTimeout:'){$result.FailureKind='RuntimeUnconfirmed';$result.Message='未能确认本次客户端启动。请查看当前防护状态，再点击“打开 Claude”重试。'}
+    elseif($detail -match 'SafetyHold|safety hold|Fixed egress mismatch'){$result.FailureKind='SafetyHold';$result.Message='后台守护已暂停专用网络。请按入口显示的暂停原因处理，再点击“维护版本”恢复防护。'}
     elseif($detail -match '^UpstreamUnavailable: '){$result.FailureKind='UpstreamUnavailable';$result.Message=$detail.Substring('UpstreamUnavailable: '.Length)}
     elseif($detail -match 'SupervisorUnavailable'){$result.FailureKind='SupervisorUnavailable';$result.Message='后台守护尚未恢复，不能确认防护准备完成。已打开的会话保留；请等待自动恢复或点击“重新检查”。'}
     elseif($detail -match 'already running|Exit Claude'){ $result.FailureKind='UnprotectedInstance';$result.Message='Claude 已从其他入口运行或尚未退出。请完全退出 Claude 后重试。' }

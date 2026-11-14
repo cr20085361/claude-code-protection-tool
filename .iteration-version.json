@@ -5,8 +5,8 @@
     "recorded_at": "2026-10-01T12:03:55+08:00",
     "version_source": null
   },
-  "current_version": "v1.7.1",
-  "completed_iterations": 27,
+  "current_version": "v1.7.2",
+  "completed_iterations": 28,
   "history": [
     {
       "id": "1ed80264-8644-40fd-a830-3d725048fa07",
@@ -874,6 +874,71 @@
         "algorithm": "sha256",
         "scope": "root-source-and-AGENTS-v1",
         "sha256": "cfe041044cef9094e63c8879fbc4036f6ebf88edf203775bc94eac67fbb03326",
+        "file_count": 79
+      }
+    },
+    {
+      "id": "49715a91-3316-44ef-93b1-66542951bd10",
+      "from_version": "v1.7.1",
+      "to_version": "v1.7.2",
+      "level": "patch",
+      "summary": "修复运行读取器发现与客户端启动确认，区分维护进度和防护暂停并恢复入口操作",
+      "verification": "39 项守护与读取器隔离回归、10 项原生维护窗口、13 项版本窗口及 26 项 PowerShell/C# 健康契约通过。实机维护恢复后，桌面快捷方式冷启动 Desktop 5.11492.5.0，实际主窗口、重新检查和关闭重开通过。同一进程连续两轮运行环境和双站出口都通过，异常连接为零。安装入口 1.7.2.0，配套 Code 2.1.325 的实际对话未验证。",
+      "recorded_at": "2026-11-14T19:33:33.9297389+08:00",
+      "local_evidence": [
+        {
+          "path": "private/launch-repair-20261114-190614/baseline.json",
+          "sha256": "302939fdf989c2063251f3319bc6a63fd01e472e4106215cc6af8b171498fc9f"
+        },
+        {
+          "path": "private/launch-repair-20261114-190614/decisions.log",
+          "sha256": "2e92b5e6f4598e00f5bee86973ed8fcbc908e5e0b30403fea0508eb1a4cdfc7b"
+        },
+        {
+          "path": "private/launch-repair-20261114-190614/maintenance-ui.log",
+          "sha256": "ae44cde0cca1e709e390c3814ae776225a8ab0103db76878e118359be341b051"
+        },
+        {
+          "path": "private/launch-repair-20261114-190614/native-window.log",
+          "sha256": "565232d7c26b122e38d1fa0bdc87545010a4b6e28188ab93a7fbc202cb432149"
+        },
+        {
+          "path": "private/launch-repair-20261114-190614/installed-held-ui.json",
+          "sha256": "60fa2b1919f326ed787725de93ad5cda98c9c60866f3ffb501277c0d82f5fa13"
+        },
+        {
+          "path": "private/launch-repair-20261114-190614/reviewed-recovery.json",
+          "sha256": "1167d8b569161b9ceda68f4b5733cc1b836562f8ea4707fbf5d53fa5a0e09c68"
+        },
+        {
+          "path": "private/launch-repair-20261114-190614/actual-shortcut-start.json",
+          "sha256": "54bd0e3546e3295e192c1e579601d62a494f4c51ad8c48e4083405d118200392"
+        },
+        {
+          "path": "private/launch-repair-20261114-190614/native-client-actions.json",
+          "sha256": "46a9313f330c6673faddcbdc237a9d5194fa9928195a5b5d2e3553b15ea3c3d3"
+        },
+        {
+          "path": "private/launch-repair-20261114-190614/live-runtime-cycles.json",
+          "sha256": "4a9de688e12a046f69b236d7eee9cde3a2ba91c03053976fb440032ec8fcad4e"
+        },
+        {
+          "path": "private/launch-repair-20261114-190614/deployment-comparison.json",
+          "sha256": "ef794f498b82180e215d46b13b8ab47721eb2860c6a6c1d010c5f95034cfb008"
+        },
+        {
+          "path": "private/launch-repair-20261114-190614/repeat-open.json",
+          "sha256": "be94ad273184be9dddc99d79ef321a10550d99f945ba5446da022d9ba825f47a"
+        },
+        {
+          "path": "private/launch-repair-20261114-190614/installed-health-check.log",
+          "sha256": "52913d3f0a9a649a46dd15eec33f7cefc94f3f8a79c9177b237811b832f06a7c"
+        }
+      ],
+      "source_fingerprint": {
+        "algorithm": "sha256",
+        "scope": "root-source-and-AGENTS-v1",
+        "sha256": "a0bf406a90178145908c77233816fca55c03934f426ec9349c59de7f8d570e25",
         "file_count": 79
       }
     }

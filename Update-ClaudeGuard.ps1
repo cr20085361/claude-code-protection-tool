@@ -244,6 +244,8 @@ $prepareEnd=[datetime]::UtcNow.AddSeconds(660)
 function Assert-PreparationBudget {if([datetime]::UtcNow -ge $prepareEnd){throw 'MaintenanceTimeout: 维护准备超过 660 秒，请查看进度。'}}
 if($OperationId){$op=Read-GuardMaintenanceOperation $OperationId;if(-not $op -or $op.Phase -ne 'Preparing' -or $op.CoordinatorPid -ne $PID){throw 'Maintenance preparation owner changed.'}}
 Assert-PreparationBudget
+Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard-Runtime.psm1')
+$null=Resolve-GuardReaderPython
 Assert-GuardPolicy
 $current=Get-GuardDesktop
 if($current.Family -ne $d.Desktop.Family){throw 'Installed package identity changed.'}

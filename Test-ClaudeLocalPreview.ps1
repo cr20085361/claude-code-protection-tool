@@ -16,6 +16,7 @@ try{
         function Get-NetTCPConnection{if($script:enumerationFails){throw 'Fixture TCP enumeration failure'};$script:tcp}
         function Get-GuardTcpListeners{if($script:listenerFails){throw 'Fixture listener inventory failure'};$script:inventory}
         function Join-Path{param($Path,$ChildPath) $ChildPath}
+        function Resolve-GuardReaderPython{'fixture-python'}
         function Get-Process{param($Id) [pscustomobject]@{StartTime=if($script:reusePid -and $Id -eq 200){$script:started.AddSeconds($script:reads)}else{$script:started}}}
         function Invoke-GuardEnvironmentReader{
             param($PythonPath,$ReaderPath,$ProcessId,$TimeoutMilliseconds,$LocalServicePath,$LocalServiceStarted)
@@ -89,6 +90,7 @@ try{
 }finally{Remove-Module $module -Force}
 # 原生进程令牌、启动时间和映像比较在独立本机服务上验证，不启动生产 Claude。
 Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard-Runtime.psm1')
 $fixture=Join-Path $PSScriptRoot ('private\preview-fixture-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path (Join-Path $fixture 'private')|Out-Null
 $server=$null
@@ -97,7 +99,7 @@ try{
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Read-ClaudeProcessEnvironment.py') -Destination $reader
     $state=Get-GuardState
     $state|ConvertTo-Json -Depth 40|Set-Content -LiteralPath (Join-Path $fixture 'private\deployment.json') -Encoding utf8
-    $info=[Diagnostics.ProcessStartInfo]::new();$info.FileName=(Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\python.exe');$info.UseShellExecute=$false;$info.CreateNoWindow=$true
+    $info=[Diagnostics.ProcessStartInfo]::new();$info.FileName=Resolve-GuardReaderPython;$info.UseShellExecute=$false;$info.CreateNoWindow=$true
     $info.ArgumentList.Add('-c');$info.ArgumentList.Add('import socket,time; s=socket.socket(); s.bind(("127.0.0.1",0)); s.listen(); time.sleep(30)')
     $environment=New-GuardDesktopEnvironment $state
     foreach($key in $environment.Keys){if($null -eq $environment[$key]){$null=$info.Environment.Remove($key)}else{$info.Environment[$key]=[string]$environment[$key]}}

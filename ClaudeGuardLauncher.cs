@@ -10,11 +10,11 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
-[assembly: System.Reflection.AssemblyVersion("1.7.1.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.7.1.0")]
+[assembly: System.Reflection.AssemblyVersion("1.7.2.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.7.2.0")]
 
 public sealed class ClaudeGuardWindow : Form {
-    public const string BuildVersion="v1.7.1";
+    public const string BuildVersion="v1.7.2";
     static readonly Color CanvasBg=Color.FromArgb(244,246,249);
     static readonly Color CardBg=Color.White;
     static readonly Color CardBorder=Color.FromArgb(226,232,240);
@@ -80,6 +80,7 @@ public sealed class ClaudeGuardWindow : Form {
     string activeActionId;
     string lastSuccessMessage;
     bool guardWarning;
+    bool heldControls;
     bool actionBusy;
     string observedMaintenanceId;
     string activeActionKind;
@@ -258,7 +259,15 @@ public sealed class ClaudeGuardWindow : Form {
         riskWatchTimer.Interval=25000;riskWatchTimer.Tick+=async delegate {if(!PreviewOnly)await PollRuntimeRiskWatchAsync();};riskWatchTimer.Start();
         FormClosed+=delegate {healthTimer.Stop();healthTimer.Dispose();versionTimer.Stop();versionTimer.Dispose();riskWatchTimer.Stop();riskWatchTimer.Dispose();};
         var iconPath=Path.Combine(root,"runtime","claude-guard.ico"); if(File.Exists(iconPath)) Icon=new Icon(iconPath);
-        Shown+=async delegate { if(!PreviewOnly) {var versions=RefreshVersionInfo(false,true);var scoreTask=RefreshRiskScoreAsync(false);if(ResumeMaintenanceOnOpen() || ResumeDesktopUpdateOnOpen())RefreshNetworkHealth();else if(StatusViewOnly){guardWarning=true;RefreshNetworkHealth();}else if(MaintenanceViewOnly){status.Text="请完全退出 Claude 和本地 Code 后，点击“维护版本”。";RefreshNetworkHealth();}else await RunAction("Start");await versions;await scoreTask;} };
+        Shown+=async delegate { if(!PreviewOnly) {
+            var versions=RefreshVersionInfo(false,true);var scoreTask=RefreshRiskScoreAsync(false);
+            bool resume=ResumeMaintenanceOnOpen() || ResumeDesktopUpdateOnOpen();
+            if(StatusViewOnly)guardWarning=true;
+            if(MaintenanceViewOnly)status.Text="请完全退出 Claude 和本地 Code 后，点击“维护版本”。";
+            RefreshNetworkHealth();
+            if(!resume && !StatusViewOnly && !MaintenanceViewOnly && !heldControls)await RunAction("Start");
+            await versions;await scoreTask;
+        }};
     }
     public void RenderVersionInfo(VersionResult info) {
         if(info==null || info.SchemaVersion!=1)throw new InvalidDataException("版本观察记录无效。");
@@ -325,7 +334,7 @@ public sealed class ClaudeGuardWindow : Form {
     }
     void RefreshDesktopUpdate(){try{var d=ReadDesktopUpdate();RenderDesktopUpdate(d);RenderClientState(IsClaudeOpen(),updateDispatchBusy || IsDesktopInstallationActive(d));}catch{downloadUpdates.Enabled=installUpdates.Enabled=false;downloadStatus.Text="更新记录暂时无法确认，请查看本地说明。";downloadStatus.ForeColor=Color.FromArgb(163,59,42);}}
     public void RenderClientState(bool desktopOpen,bool installing) {
-        launch.Text=installing?"更新进行中":desktopOpen?"Claude 已打开":"打开 Claude";
+        launch.Text=installing?"更新进行中":activeActionKind=="Start"?"正在核验启动":desktopOpen?"Claude 已打开":"打开 Claude";
         if(desktopOpen && lastDesktopOpen==false && !installing && !PreviewOnly){
             var _=PollRuntimeRiskWatchAsync();
         }
@@ -430,10 +439,7 @@ public sealed class ClaudeGuardWindow : Form {
         bool live=m.WorkerPid>0?ProcessMatches(m.WorkerPid,m.WorkerStarted,m.WorkerPath):ProcessMatches(m.CoordinatorPid,m.CoordinatorStarted,m.CoordinatorPath);
         var view=AssessMaintenance(m,DateTimeOffset.UtcNow,live,held);
         if(view.Held){
-            status.Text=view.Message;status.ForeColor=Color.FromArgb(163,59,42);
-            networkHealth.Text=view.Message;networkHealth.ForeColor=status.ForeColor;
-            if(!actionBusy){launch.Enabled=check.Enabled=login.Enabled=false;maintenance.Enabled=!live;}
-            guardWarning=false;return true;
+            ShowSafetyHold(null,m);return true;
         }
         if(view.BlockStart){
             if(!actionBusy){launch.Enabled=check.Enabled=login.Enabled=false;maintenance.Enabled=view.Recover;}
@@ -444,6 +450,24 @@ public sealed class ClaudeGuardWindow : Form {
         if(!actionBusy)launch.Enabled=check.Enabled=login.Enabled=maintenance.Enabled=true;
         if(view.Failed){status.Text=view.Message;status.ForeColor=Color.FromArgb(163,59,42);guardWarning=false;}
         return false;
+    }
+    void ShowSafetyHold(string healthReason,MaintenanceResult operation) {
+        string reason=healthReason??"";
+        try {
+            var record=json.Deserialize<RecoveryResult>(ReadSharedText(Path.Combine(root,"private","safety-hold.json")));
+            if(record!=null && !String.IsNullOrWhiteSpace(record.Reason))reason=record.Reason;
+        }catch{}
+        string detail="守护检测到防护配置或运行状态异常。";
+        if(operation!=null && operation.Status=="Failed" && operation.FailureKind=="RuntimeReaderUnavailable")
+            detail="运行检查需要可用的 64 位 Python 3。请先安装或修复 Python。";
+        else if(reason.Contains("RuntimeReaderUnavailable"))detail="未找到可运行的 64 位 Python 3。请先安装或修复 Python。";
+        else if(reason.Contains("RuntimeEnvironmentUnreadable"))detail="守护无法核验 Claude 的运行环境。请确认 64 位 Python 3 可用，并用同一 Windows 账号打开入口。";
+        else if(reason.Contains("RuntimeEnvironmentMismatch"))detail="Claude 的运行环境与核准配置不符。";
+        else if(reason.Contains("UnexpectedRuntimeNetworkPath") || reason.Contains("Fixed egress mismatch"))detail="守护发现未经核准的网络连接或出口。";
+        status.Text=detail+"\n退出 Claude 和本地 Code 后，点击“维护版本”重新核验并恢复防护。";
+        status.ForeColor=Color.FromArgb(163,59,42);networkHealth.ForeColor=status.ForeColor;
+        networkHealth.Text="防护已暂停，专用网络已关闭。";lastSuccessMessage=null;guardWarning=true;heldControls=true;
+        launch.Enabled=check.Enabled=login.Enabled=false;maintenance.Enabled=!actionBusy;
     }
     void RenderMaintenanceCompletion(MaintenanceResult m,HealthResult h,DeploymentResult d,bool ready) {
         if(m==null || m.ActionId!=observedMaintenanceId || m.Status!="Completed" || !ready || String.IsNullOrEmpty(m.ResultFile))return;
@@ -463,30 +487,24 @@ public sealed class ClaudeGuardWindow : Form {
             MaintenanceResult operation;
             bool persistedHold=File.Exists(Path.Combine(root,"private","safety-hold.json"));
             if(RenderMaintenance(persistedHold,out operation))return;
+            if(persistedHold){ShowSafetyHold(null,operation);return;}
             var path=Path.Combine(root,"private","supervisor-health.json");
             if(!File.Exists(path)) { ShowGuardWarning("后台守护状态尚未取得，正在等待自动恢复。");return;}
             var health=new JavaScriptSerializer().Deserialize<HealthResult>(ReadSharedText(path));
+            if(health!=null && health.Status=="SafetyHold"){ShowSafetyHold(health.Reason,operation);return;}
             var deployment=json.Deserialize<DeploymentResult>(ReadSharedText(Path.Combine(root,"private","deployment.json")));
             var identity=json.Deserialize<HostIdentity>(ReadSharedText(Path.Combine(root,"private","supervisor-host-identity.json")));
-            if(File.Exists(Path.Combine(root,"private","safety-hold.json")) || (health!=null && health.Status=="SafetyHold")) {
-                networkHealth.Text="网络防护已暂停，请退出 Claude 后进行版本维护。";networkHealth.ForeColor=Color.FromArgb(163,59,42);
-                if(check.Enabled){status.Text="后台守护发现防护异常，专用网络已暂停。\n请完全退出 Claude 后点击“维护版本”，核验通过再使用。";status.ForeColor=Color.FromArgb(163,59,42);}
-                return;
-            }
             bool identities=health!=null && deployment!=null && deployment.Reliability!=null &&
                 ProcessMatches(health.HostPid,health.HostStarted,deployment.Reliability.HostPath) &&
                 ProcessMatches(health.SupervisorPid,health.SupervisorStarted,deployment.Reliability.ShellPath);
             string failure=ValidateHealth(health,deployment,identity,DateTimeOffset.UtcNow,identities,File.Exists(Path.Combine(root,"private","safety-hold.json")));
-            if(failure!=null && (health==null || health.Status!="SafetyHold")){ShowGuardWarning(failure);return;}
+            if(failure!=null){ShowGuardWarning(failure);return;}
+            if(heldControls && !actionBusy){heldControls=false;launch.Enabled=check.Enabled=login.Enabled=maintenance.Enabled=true;}
             RenderMaintenanceCompletion(operation,health,deployment,failure==null);
             networkHealth.ForeColor=Color.FromArgb(163,59,42);
             switch(health.Status) {
                 case "Healthy": networkHealth.Text=deployment.ExpectedIps!=null?"后台守护健康，已核准节点池（"+deployment.ExpectedIps.Length+" 条）出口检查通过。":"后台守护健康，固定出口检查通过。";networkHealth.ForeColor=Color.FromArgb(24,106,65);RestoreGuardMessage();break;
                 case "ProbeDegraded": networkHealth.Text="一个检测站暂不可用，另一站已确认固定出口。";networkHealth.ForeColor=Color.FromArgb(145,99,20);RestoreGuardMessage();break;
-                case "SafetyHold":
-                    networkHealth.Text="网络防护已暂停，请退出 Claude 后进行版本维护。";
-                    if(check.Enabled){status.Text="后台守护发现防护异常，专用网络已暂停。\n请完全退出 Claude 后点击“维护版本”，核验通过再使用。";status.ForeColor=Color.FromArgb(163,59,42);launch.Text="打开 Claude";}
-                    break;
                 case "UpstreamUnavailable": networkHealth.Text="固定节点暂不可达，守护正在退避重试。";break;
                 case "UpgradeRequired": networkHealth.Text="Claude 版本已变化，请退出客户端后进行版本维护。";break;
                 case "InterfaceUnavailable": networkHealth.Text="绑定网卡不可用，请等待原网络恢复或重新核验。";break;
@@ -520,6 +538,16 @@ public sealed class ClaudeGuardWindow : Form {
             var d=json.Deserialize<DeploymentResult>(ReadSharedText(Path.Combine(root,"private","deployment.json")));
             foreach(var p in Process.GetProcessesByName("Claude")) {using(p){try{if(p.MainModule.FileName.Equals(d.Desktop.Path,StringComparison.OrdinalIgnoreCase))return true;}catch{}}}
         } catch {} return false;
+    }
+    [DllImport("user32.dll")] static extern bool IsIconic(IntPtr window);
+    [DllImport("user32.dll")] static extern bool ShowWindowAsync(IntPtr window,int command);
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr window);
+    public static bool TryActivateWindow(int pid) {
+        try {using(var p=Process.GetProcessById(pid)){
+            IntPtr handle=p.MainWindowHandle;if(handle==IntPtr.Zero)return false;
+            if(IsIconic(handle))ShowWindowAsync(handle,9);
+            return SetForegroundWindow(handle);
+        }}catch{return false;}
     }
     [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr OpenProcess(uint access,bool inherit,int pid);
     [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool QueryFullProcessImageName(IntPtr h,uint flags,StringBuilder name,ref uint length);
@@ -567,7 +595,7 @@ public sealed class ClaudeGuardWindow : Form {
         string actionId=Guid.NewGuid().ToString("N");activeActionId=actionId;guardWarning=false;
         launch.Enabled=check.Enabled=login.Enabled=maintenance.Enabled=false;
         lastSuccessMessage=null;
-        status.ForeColor=Color.FromArgb(70,79,91); status.Text=action=="Update"?"正在核验官方版本和防护配置……\nWindows 提示管理员授权时，请核对后允许。":"正在检查连接，请稍候……\n检查通过才会打开 Claude。";
+        status.ForeColor=Color.FromArgb(70,79,91); status.Text=action=="Update"?"正在核验官方版本和防护配置……\nWindows 提示管理员授权时，请核对后允许。":action=="Start"?"正在检查专用网络与客户端运行环境……\n核验本次启动后会显示结果。":"正在核验专用网络和防护状态……";
         try {
             var result=await Task.Run(delegate {
                 string resultFile=Path.Combine(root,"private","ui-result-"+Guid.NewGuid().ToString("N")+".json");
@@ -582,7 +610,7 @@ public sealed class ClaudeGuardWindow : Form {
                         }else if(!p.WaitForExit(180000)){if(!p.HasExited)p.Kill();throw new InvalidOperationException("后台检查尚未完成，暂时无法确认启动状态。");}
                         if(!File.Exists(resultFile)) throw new InvalidOperationException("后台检查无法完成，请查看说明。");
                         var parsed=json.Deserialize<UiResult>(ReadSharedText(resultFile));
-                        if(parsed==null || parsed.ActionId!=actionId || (parsed.Success && !parsed.SupervisorVerified) || (p.ExitCode!=0 && parsed.Success)) throw new InvalidOperationException("后台结果不一致。");
+                        if(parsed==null || parsed.ActionId!=actionId || (parsed.Success && (!parsed.SupervisorVerified || (action=="Start" && (!parsed.RuntimeVerified || parsed.DesktopPid.GetValueOrDefault()<=0)))) || (p.ExitCode!=0 && parsed.Success)) throw new InvalidOperationException("后台结果不一致。");
                         return parsed;
                     }
                 } finally {
@@ -595,7 +623,10 @@ public sealed class ClaudeGuardWindow : Form {
             status.ForeColor=result.Success?Color.FromArgb(24,106,65):(result.Pending?Color.FromArgb(145,99,20):Color.FromArgb(163,59,42));
             if(result.RiskScore!=null)ApplyRiskScoreView(result.RiskScore);
             if(result.FailureKind=="NetworkRiskBlocked")status.Text=result.Message+"\n请点击下方“一键防泄露修复”或调高门限后再次打开。";
-            if(result.Success) {lastSuccessMessage=result.Message;RunApiDiagnostic(actionId);}
+            if(result.Success) {
+                lastSuccessMessage=result.Message;RunApiDiagnostic(actionId);
+                if(action=="Start")TryActivateWindow(result.DesktopPid.Value);
+            }
             RefreshClientState();
         } catch { status.Text="安全检查未能完成，暂时无法确认启动状态。\n请查看说明后重新检查。";status.ForeColor=Color.FromArgb(163,59,42); }
         finally {actionBusy=false;activeActionKind=null;if(!IsDisposed){launch.Enabled=check.Enabled=login.Enabled=maintenance.Enabled=true;RefreshClientState();RefreshNetworkHealth();RefreshDesktopUpdate();}}
@@ -927,18 +958,18 @@ public sealed class ClaudeGuardWindow : Form {
             dlg.ShowDialog(this);
         }
     }
-    public class UiResult {public bool Pending {get;set;}public string OperationId {get;set;} public bool Success {get;set;} public string Message {get;set;} public bool SessionVerified {get;set;} public bool SupervisorVerified {get;set;} public string FailureKind {get;set;} public string ActionId {get;set;} public ApiResult ApiTransport {get;set;} public RiskScoreResult RiskScore {get;set;} }
+    public class UiResult {public bool Pending {get;set;}public string OperationId {get;set;} public bool Success {get;set;} public string Message {get;set;} public bool SessionVerified {get;set;} public bool SupervisorVerified {get;set;} public bool RuntimeVerified {get;set;} public int? DesktopPid {get;set;} public string FailureKind {get;set;} public string ActionId {get;set;} public ApiResult ApiTransport {get;set;} public RiskScoreResult RiskScore {get;set;} }
     public class RiskScoreResult {public int Score {get;set;} public string Grade {get;set;} public int Threshold {get;set;} public bool GateEnabled {get;set;} public bool PassedGate {get;set;} public bool DynamicWatchEnabled {get;set;} public int WatchIntervalSeconds {get;set;} public bool AutoHealOnDegrade {get;set;} public string RuntimeEnforcementMode {get;set;} public string RuntimeStatus {get;set;} public string RuntimeAlertMessage {get;set;} public string[] AutoHealedItems {get;set;} public string[] DegradedItems {get;set;} public bool TerminatedProtectedProcesses {get;set;} public int TerminatedProcessCount {get;set;} public string[] TopRisks {get;set;} public string Summary {get;set;} public RiskBreakdownItem[] Breakdown {get;set;} }
     public class RiskBreakdownItem {public string Id {get;set;} public string Label {get;set;} public int Points {get;set;} public int MaxPoints {get;set;} public string Status {get;set;} public string Detail {get;set;} public string FixHint {get;set;} }
     public class ApiResult {public int CurlExitCode {get;set;}}
-    public class HealthResult { public int SchemaVersion {get;set;} public string Time {get;set;} public string Status {get;set;} public string RunId {get;set;} public int HostPid {get;set;} public string HostStarted {get;set;} public int SupervisorPid {get;set;} public string SupervisorStarted {get;set;} public string LastSafetyCheck {get;set;} public string LastEgressCheck {get;set;} public EgressResult LastVerifiedEgress {get;set;} public int ConsecutiveFailures {get;set;} public string NextProbe {get;set;} }
+    public class HealthResult { public int SchemaVersion {get;set;} public string Time {get;set;} public string Status {get;set;} public string Reason {get;set;} public string RunId {get;set;} public int HostPid {get;set;} public string HostStarted {get;set;} public int SupervisorPid {get;set;} public string SupervisorStarted {get;set;} public string LastSafetyCheck {get;set;} public string LastEgressCheck {get;set;} public EgressResult LastVerifiedEgress {get;set;} public int ConsecutiveFailures {get;set;} public string NextProbe {get;set;} }
     public class EgressResult {public int VerifiedProbeCount {get;set;}public string CloudflareIp {get;set;}public string IpifyIp {get;set;}}
     public class HostIdentity {public string RunId {get;set;} public int HostPid {get;set;} public string HostStarted {get;set;} public int SupervisorPid {get;set;} public string SupervisorStarted {get;set;}public string ShellPath {get;set;}public string ScriptPath {get;set;}}
     public class DeploymentResult {public ReliabilityResult Reliability {get;set;}public DesktopResult Desktop {get;set;}public CodeResult CodeGate {get;set;}public string ExpectedIp {get;set;}public string[] ExpectedIps {get;set;}}
     public class DesktopResult {public string Path {get;set;}public string Version {get;set;}}
     public class CodeResult {public string Version {get;set;}}
     public class ReliabilityResult {public string HostPath {get;set;}public string ShellPath {get;set;}public string SupervisorScript {get;set;}}
-    public class MaintenanceResult {public int SchemaVersion {get;set;}public string ActionId {get;set;}public string StageId {get;set;}public string ResultFile {get;set;}public string Status {get;set;}public string Phase {get;set;}public string StartedAt {get;set;}public string CompletedAt {get;set;}public int CoordinatorPid {get;set;}public string CoordinatorStarted {get;set;}public string CoordinatorPath {get;set;}public int WorkerPid {get;set;}public string WorkerStarted {get;set;}public string WorkerPath {get;set;}public bool RecoveryRequired {get;set;}public bool SupervisorSuspended {get;set;}public string Reason {get;set;}}
+    public class MaintenanceResult {public int SchemaVersion {get;set;}public string ActionId {get;set;}public string StageId {get;set;}public string ResultFile {get;set;}public string Status {get;set;}public string Phase {get;set;}public string StartedAt {get;set;}public string CompletedAt {get;set;}public int CoordinatorPid {get;set;}public string CoordinatorStarted {get;set;}public string CoordinatorPath {get;set;}public int WorkerPid {get;set;}public string WorkerStarted {get;set;}public string WorkerPath {get;set;}public bool RecoveryRequired {get;set;}public bool SupervisorSuspended {get;set;}public string Reason {get;set;}public string FailureKind {get;set;}}
     public class MaintenanceView {public bool BlockStart;public bool Observe;public bool Recover;public bool Completed;public bool Failed;public bool Held;public string Message;}
     public class MigrationResult {public bool Success {get;set;}public string ActionId {get;set;}public string StageId {get;set;}public string DesktopVersion {get;set;}public string CodeVersion {get;set;}}
     public class RecoveryResult {public string NextRestart {get;set;}public string Reason {get;set;}}
@@ -964,7 +995,17 @@ public static class Launcher {
         if(args.Length==1 && args[0]=="--status")window.StatusViewOnly=true;
         bool created;
         using(var single=new Mutex(true,"Local\\ClaudeProGuardLauncher-v1",out created)){
-            if(!created){MessageBox.Show("安全入口已在运行，请切换到该窗口。","Claude Pro",MessageBoxButtons.OK,MessageBoxIcon.Information);return 0;}
+            if(!created){
+                using(var self=Process.GetCurrentProcess()){
+                    foreach(var other in Process.GetProcessesByName(self.ProcessName)){using(other){
+                        try{if(other.Id!=self.Id && other.SessionId==self.SessionId &&
+                            String.Equals(other.MainModule.FileName,Application.ExecutablePath,StringComparison.OrdinalIgnoreCase)){
+                            ClaudeGuardWindow.TryActivateWindow(other.Id);break;
+                        }}catch{}
+                    }}
+                }
+                window.Dispose();return 0;
+            }
             Application.Run(window);
         }
         return 0;

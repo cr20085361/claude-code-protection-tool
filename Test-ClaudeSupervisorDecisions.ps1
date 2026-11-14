@@ -2,6 +2,7 @@
 param([string]$ProjectRoot=$PSScriptRoot)
 $ErrorActionPreference='Stop'
 Import-Module (Join-Path $ProjectRoot 'ClaudeGuard.psm1') -Force
+Import-Module (Join-Path $ProjectRoot 'ClaudeGuard-Runtime.psm1')
 $source=Get-Content (Join-Path $PSScriptRoot 'ClaudeGuard-Supervisor-v2.ps1') -Raw
 $shell=(Get-Content (Get-GuardPath 'private\launcher-paths.txt') -Raw).Trim()
 $results=@()
@@ -159,7 +160,7 @@ function Get-Process{[pscustomobject]@{StartTime=[datetime]::UtcNow}}
 '@
     $runtimeFooter=@'
 function Get-GuardTcpListeners{}
-$python=(Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\python.exe')
+$python=Resolve-GuardReaderPython
 $info=[Diagnostics.ProcessStartInfo]::new();$info.FileName=$python;$info.UseShellExecute=$false;$info.CreateNoWindow=$true
 $info.ArgumentList.Add('-c');$info.ArgumentList.Add('import time; time.sleep(20)')
 $sentinel=[Diagnostics.Process]::Start($info)
@@ -200,6 +201,28 @@ try{
         if($observed.Safe -ne $case.Safe -or @($observed.UnconfirmedLoopbackConnections).Count -ne $case.Pending -or (@($observed.UnexpectedConnections).Count -gt 0) -eq $case.Safe){throw ('Network decision fixture failed: '+$case.Name+' '+($observed|ConvertTo-Json -Depth 8 -Compress))}
         $cases+=@{Scenario=$case.Name;Passed=$true;Safe=$observed.Safe;UnconfirmedLoopbackCount=@($observed.UnconfirmedLoopbackConnections).Count}
     }
+    # Exercise the launch contract against positive evidence for this exact
+    # process, including the idle-safe snapshot that used to look like success.
+    $knownStart=[datetime]::UtcNow.AddMinutes(-1)
+    function Get-Process{[pscustomobject]@{StartTime=$knownStart}}
+    function Get-GuardRuntimeSafety{
+        [pscustomobject]@{Safe=$true;OwnedProcesses=@(@{Pid=101;Started=$knownStart});Environments=$launchEvidence}
+    }
+    $launchEvidence=@([pscustomobject]@{Pid=101;ApprovedPath=$true})
+    Assert-GuardLaunchedRuntime 101 $knownStart ([datetime]::UtcNow.AddSeconds(5))
+    foreach($mode in @('missing-main-evidence','wrong-pid','reused-pid')){
+        $start=$knownStart
+        $launchEvidence=@()
+        if($mode -eq 'wrong-pid'){$launchEvidence=@([pscustomobject]@{Pid=999;ApprovedPath=$true})}
+        if($mode -eq 'reused-pid'){$launchEvidence=@([pscustomobject]@{Pid=101;ApprovedPath=$true});$start=$knownStart.AddSeconds(1)}
+        try{Assert-GuardLaunchedRuntime 101 $start ([datetime]::UtcNow.AddSeconds(5));throw 'Unexpected launch confirmation'}catch{if($_.Exception.Message -notlike 'RuntimeLaunchIdentityChanged:*'){throw}}
+        $cases+=@{Scenario=$mode;Passed=$true}
+    }
+    function Get-GuardReaderPythonCandidates{@('python.exe','C:\WindowsApps\python.exe',(Join-Path $PSScriptRoot 'missing\python.exe'))}
+    try{$null=Resolve-GuardReaderPython;throw 'Missing reader incorrectly accepted'}catch{if($_.Exception.Message -notlike 'RuntimeReaderUnavailable:*'){throw}}
+    $missing=Get-GuardRuntimeSnapshot
+    if($missing.Safe -or 'RuntimeReaderUnavailable' -notin $missing.Issues){throw 'Missing runtime reader must fail closed while Claude is running.'}
+    $cases+=@{Scenario='missing-reader-fails-before-launch-and-in-runtime';Passed=$true}
     $cases|ConvertTo-Json
 }finally{if(-not $sentinel.HasExited){$sentinel.Kill();$null=$sentinel.WaitForExit(1000)};$sentinel.Dispose()}
 '@
@@ -216,7 +239,7 @@ sys.argv = ['reader.py', '1', '--timeout-seconds', '0.2']
 runpy.run_path(str(pathlib.Path(__file__).with_name('reader.py')), run_name='__main__')
 '@
     [IO.File]::WriteAllText((Join-Path $fixture 'watchdog.py'),$watchdog)
-    $python=(Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\python.exe')
+    $python=Resolve-GuardReaderPython
     $timer=[Diagnostics.Stopwatch]::StartNew();$out=& $python (Join-Path $fixture 'watchdog.py') 2>&1
     if($LASTEXITCODE -ne 124 -or $out -or $timer.ElapsedMilliseconds -ge 2000){throw 'Python reader watchdog fixture failed.'}
     $results+=@{Scenario='python-reader-watchdog';Passed=$true;ExitCode=$LASTEXITCODE;ElapsedMilliseconds=$timer.ElapsedMilliseconds;EmittedEvidence=$false}

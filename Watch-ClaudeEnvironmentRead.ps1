@@ -2,8 +2,9 @@
 param([ValidateRange(10,900)][int]$Seconds=120)
 $ErrorActionPreference='Stop'
 Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard-Runtime.psm1')
 $state=Get-GuardState
-$python=(Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\python.exe')
+$python=Resolve-GuardReaderPython
 $deadline=[datetime]::UtcNow.AddSeconds($Seconds)
 $seen=@{};$records=@()
 $resultPath=Get-GuardPath 'evidence\runtime-environment-native-diagnostic.json'
@@ -18,7 +19,7 @@ do {
             if($seen[$key]){continue};$seen[$key]=$true
             $info=[Diagnostics.ProcessStartInfo]::new();$info.FileName=$python;$info.UseShellExecute=$false;$info.CreateNoWindow=$true
             $info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
-            $info.ArgumentList.Add((Join-Path $PSScriptRoot 'Read-ClaudeProcessEnvironment.py'));$info.ArgumentList.Add([string]$process.Id)
+            $info.ArgumentList.Add('-I');$info.ArgumentList.Add('-S');$info.ArgumentList.Add((Join-Path $PSScriptRoot 'Read-ClaudeProcessEnvironment.py'));$info.ArgumentList.Add([string]$process.Id)
             $reader=[Diagnostics.Process]::new();$reader.StartInfo=$info;$timer=[Diagnostics.Stopwatch]::StartNew();$null=$reader.Start()
             $output=$reader.StandardOutput.ReadToEndAsync();$stderr=$reader.StandardError.ReadToEndAsync()
             $timedOut=-not $reader.WaitForExit(10000);if($timedOut){$reader.Kill();$null=$reader.WaitForExit(1000)}

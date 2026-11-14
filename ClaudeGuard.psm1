@@ -605,6 +605,8 @@ function Assert-GuardDesktopNetwork([int]$ProcessId,[datetime]$DeadlineUtc=[date
     throw 'Actual Desktop proxy connection could not be verified; do not continue login.'
 }
 function Start-GuardDesktop([datetime]$DeadlineUtc=[datetime]::MaxValue) {
+    Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard-Runtime.psm1')
+    $null=Resolve-GuardReaderPython
     Assert-GuardPolicy
     Assert-GuardFirewall
     Start-GuardProxy -DeadlineUtc $DeadlineUtc
@@ -617,7 +619,11 @@ function Start-GuardDesktop([datetime]$DeadlineUtc=[datetime]::MaxValue) {
     $arguments=@(('--proxy-server='+$d.ProxyUrl),'--proxy-bypass-list=localhost;127.0.0.1;[::1]','--disable-quic')
     $proc=Start-Process -FilePath $d.Desktop.Path -WorkingDirectory $script:Root -ArgumentList $arguments -Environment $environment -WindowStyle Normal -PassThru -RedirectStandardOutput (Get-GuardPath 'private\desktop.stdout.log') -RedirectStandardError (Get-GuardPath 'private\desktop.stderr.log')
     Write-GuardJson (Get-GuardPath 'evidence\last-launch.json') @{Time=(Get-Date -Format o);Pid=$proc.Id;ProcessStart=$proc.StartTime.ToUniversalTime().ToString('o');Path=$d.Desktop.Path;ConfigDir=$d.ConfigDir;Proxy=$d.ProxyUrl;Egress=$egress;Mode='pro-local-code';RealCodeSessionVerified=(Test-GuardLocalCodeAcceptance)}
-    try { Assert-GuardDesktopNetwork $proc.Id -DeadlineUtc $DeadlineUtc } catch {
+    try {
+        Assert-GuardDesktopNetwork $proc.Id -DeadlineUtc $DeadlineUtc
+        Assert-GuardLaunchedRuntime $proc.Id $proc.StartTime $DeadlineUtc
+        $null=Get-GuardVerifiedEgress
+    } catch {
         # This launch began with no existing Desktop. Stop only its exact executable tree.
         $owned=@(Get-GuardDesktopProcesses)
         $main=@($owned|Where-Object ProcessId -eq $proc.Id)

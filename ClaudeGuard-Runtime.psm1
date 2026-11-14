@@ -1,12 +1,57 @@
 ﻿Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard.psm1')
+function Get-GuardReaderPythonCandidates {
+    # The scheduled supervisor uses the original user's limited token. An
+    # elevated caller must never execute a per-user interpreter discovered here.
+    $roots=@('HKLM:\SOFTWARE\Python\PythonCore')
+    $principal=[Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+    $limited=-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if($limited){$roots+=@('HKCU:\SOFTWARE\Python\PythonCore')}
+    foreach($root in $roots){
+        $versions=Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue |
+            Where-Object {$_.PSChildName -match '^3\.\d+(\.\d+)?$'} | Sort-Object {[version]$_.PSChildName} -Descending
+        foreach($version in $versions){
+            $install=Get-Item -LiteralPath (Join-Path $version.PSPath 'InstallPath') -ErrorAction SilentlyContinue
+            if(-not $install){continue}
+            $exe=$install.GetValue('ExecutablePath')
+            if($exe){$exe}elseif($install.GetValue('')){Join-Path $install.GetValue('') 'python.exe'}
+        }
+    }
+    if($limited){
+        $folder=Join-Path $env:LOCALAPPDATA 'Programs\Python'
+        Get-ChildItem -LiteralPath $folder -Directory -Filter 'Python3*' -ErrorAction SilentlyContinue |
+            ForEach-Object {Join-Path $_.FullName 'python.exe'}
+    }
+}
+function Resolve-GuardReaderPython([int]$TimeoutMilliseconds=4000) {
+    $clock=[Diagnostics.Stopwatch]::StartNew()
+    foreach($path in @(Get-GuardReaderPythonCandidates | Select-Object -Unique)){
+        if($path -notmatch '^[A-Za-z]:\\' -or [IO.Path]::GetFileName($path) -ine 'python.exe' -or
+            $path -match '\\WindowsApps\\' -or -not [IO.File]::Exists($path)){continue}
+        $remaining=$TimeoutMilliseconds-[int]$clock.ElapsedMilliseconds
+        if($remaining -le 0){break}
+        $info=[Diagnostics.ProcessStartInfo]::new()
+        $info.FileName=$path;$info.UseShellExecute=$false;$info.CreateNoWindow=$true
+        $info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
+        foreach($arg in @('-I','-S','-c','import ctypes, json, pathlib, struct, sys, threading, urllib.parse; sys.exit(0 if sys.implementation.name == "cpython" and sys.version_info.major == 3 and struct.calcsize("P") == 8 else 1)')){$info.ArgumentList.Add($arg)}
+        $probe=[Diagnostics.Process]::new();$probe.StartInfo=$info
+        try{
+            if(-not $probe.Start()){continue}
+            $null=$probe.StandardOutput.ReadToEndAsync();$null=$probe.StandardError.ReadToEndAsync()
+            if(-not $probe.WaitForExit([Math]::Min(1500,$remaining))){$probe.Kill();continue}
+            if($probe.ExitCode -eq 0){return [IO.Path]::GetFullPath($path)}
+        }catch [System.ComponentModel.Win32Exception] {continue}
+        finally{$probe.Dispose()}
+    }
+    throw 'RuntimeReaderUnavailable: 未找到可运行的 64 位 Python 3。请安装或修复 Windows 64 位 CPython，再重试。'
+}
 function Invoke-GuardEnvironmentReader([string]$PythonPath,[string]$ReaderPath,[int]$ProcessId,[int]$TimeoutMilliseconds,[string]$LocalServicePath='',[long]$LocalServiceStarted=0) {
     if($TimeoutMilliseconds -le 0){return [pscustomobject]@{ExitCode=124;Output='';TimedOut=$true}}
     $info=[Diagnostics.ProcessStartInfo]::new()
     $info.FileName=$PythonPath;$info.UseShellExecute=$false;$info.CreateNoWindow=$true
     $info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
-    $info.ArgumentList.Add($ReaderPath);$info.ArgumentList.Add([string]$ProcessId)
+    $info.ArgumentList.Add('-I');$info.ArgumentList.Add('-S');$info.ArgumentList.Add($ReaderPath);$info.ArgumentList.Add([string]$ProcessId)
     if($LocalServicePath){
         $info.ArgumentList.Add('--local-service-path');$info.ArgumentList.Add($LocalServicePath)
         $info.ArgumentList.Add('--local-service-started');$info.ArgumentList.Add([string]$LocalServiceStarted)
@@ -102,8 +147,12 @@ function Get-GuardRuntimeSnapshot([ValidateRange(1,30000)][int]$EvidenceBudgetMi
     $listeners=@(Get-GuardTcpListeners)
     $connections=@($tcp|Where-Object {$_.OwningProcess -in $pids -and $_.State -in 'Established','SynSent'})
     $localServices=@($listeners|Where-Object OwningProcess -in $descendants)
-    $python=(Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\python.exe')
     $readerClock=[Diagnostics.Stopwatch]::StartNew()
+    $python=$null
+    if($mains.Count -or $code.Count -or $connections.Count){
+        try{$python=Resolve-GuardReaderPython ([Math]::Min(4000,$EvidenceBudgetMilliseconds))}
+        catch{if($_.Exception.Message -notlike 'RuntimeReaderUnavailable:*'){throw};$issues.Add('RuntimeReaderUnavailable')}
+    }
     $previewServices=@();$previewPids=@();$readerTimeoutPids=@();$deadlineExceeded=$false
     $previewChecks=[Collections.Generic.List[object]]::new()
     # detached 服务不依赖已经退出的 shell；仅核验 Claude 实际连接的回环端点。
@@ -125,6 +174,7 @@ function Get-GuardRuntimeSnapshot([ValidateRange(1,30000)][int]$EvidenceBudgetMi
         if($ownerId -in $checkedOwners){continue};$checkedOwners+=@($ownerId)
         $check=[pscustomobject]@{Pid=$ownerId;LocalAddress=$candidate.LocalAddress;LocalPort=$candidate.LocalPort;Accepted=$false;Reason='OwnerUnavailable'}
         $previewChecks.Add($check)
+        if(-not $python){$check.Reason='RuntimeReaderUnavailable';continue}
         $owner=@($processes|Where-Object ProcessId -eq $ownerId|Select-Object -First 1)
         if($owner.Count -ne 1 -or -not $owner[0].ExecutablePath){continue}
         if(@($listeners|Where-Object {$_.OwningProcess -eq $ownerId -and -not (Test-GuardLoopbackAddress $_.LocalAddress)}).Count){$check.Reason='NonLoopbackListener';continue}
@@ -173,6 +223,7 @@ function Get-GuardRuntimeSnapshot([ValidateRange(1,30000)][int]$EvidenceBudgetMi
     if($unexpected.Count){$issues.Add('UnexpectedRuntimeNetworkPath')}
     $environments=@()
     foreach($p in @($mains)+@($code)) {
+        if(-not $python){continue}
         # 瞬间已退出的子进程不作为失败；仍在运行却不能回读时停止核准。
         if(-not (Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue)){continue}
         $remaining=[Math]::Max(0,$EvidenceBudgetMilliseconds-[int]$readerClock.ElapsedMilliseconds)
@@ -207,6 +258,20 @@ function Get-GuardRuntimeSafety([ValidateRange(1,30000)][int]$EvidenceBudgetMill
         $snapshot|Add-Member -NotePropertyName LoopbackRecheck -NotePropertyValue $first
     }
     $snapshot
+}
+function Assert-GuardLaunchedRuntime([int]$ProcessId,[datetime]$ProcessStart,[datetime]$DeadlineUtc) {
+    $remaining=[Math]::Min(30000,($DeadlineUtc-[datetime]::UtcNow).TotalMilliseconds)
+    if($remaining -lt 1){throw 'RuntimeVerificationTimeout: 本次启动核验已超时。'}
+    $snapshot=Get-GuardRuntimeSafety -EvidenceBudgetMilliseconds ([int]$remaining)
+    if(-not $snapshot.Safe){throw ('RuntimeVerificationFailed: '+($snapshot.Issues -join ','))}
+    $stamp=$ProcessStart.ToUniversalTime().Ticks
+    $identity=@($snapshot.OwnedProcesses|Where-Object {$_.Pid -eq $ProcessId -and ([datetime]$_.Started).ToUniversalTime().Ticks -eq $stamp})
+    $evidence=@($snapshot.Environments|Where-Object {$_.Pid -eq $ProcessId -and $_.ApprovedPath -eq $true})
+    $live=Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    if($identity.Count -ne 1 -or $evidence.Count -ne 1 -or -not $live -or $live.StartTime.ToUniversalTime().Ticks -ne $stamp){
+        throw 'RuntimeLaunchIdentityChanged: 无法确认本次启动的客户端仍在运行。'
+    }
+    if([datetime]::UtcNow -ge $DeadlineUtc){throw 'RuntimeVerificationTimeout: 本次启动核验已超时。'}
 }
 function Stop-GuardUnsafeRuntime($Snapshot) {
     $d=Get-GuardState
