@@ -2,9 +2,11 @@
 
 面向 **Windows x64、Claude Desktop 及其本地 Code 会话**的桌面安全入口。项目提供专用代理、防火墙与执行门禁核验、后台守护、版本显示，以及官方 Desktop 和配套 Code 的受控更新。
 
-当前源码基线：**v1.7.0 · 第 26 次源码迭代**。采用 [MIT 许可证](LICENSE)。本工具与 Anthropic 无隶属关系，不保证账号不受限制，也不改变服务的支持地区或使用政策。
+当前源码基线：**v1.7.1 · 第 27 次源码迭代**。采用 [MIT 许可证](LICENSE)。本工具与 Anthropic 无隶属关系，不保证账号不受限制，也不改变服务的支持地区或使用政策。
 
-本次公开存档包含 v1.4.6 的完整哈希顺序读取优化与 v1.4.7 的 Desktop 5.x 更新兼容修复：识别新版配套 Code 在托管 `disableAutoUpdates` 策略下提前返回的更新检查，下载、维护和首次 Code 准备使用同一控制契约。部署与公开副本分别登记精确源码指纹，保留历史台账及首次公开快照。当前入口编译版本为 v1.4.8（1.4.8.0）；具体证据及边界见 [验证记录](docs/VALIDATION.md)。
+本次公开存档包含 v1.4.6 的完整哈希顺序读取优化与 v1.4.7 的 Desktop 5.x 更新兼容修复：识别新版配套 Code 在托管 `disableAutoUpdates` 策略下提前返回的更新检查，下载、维护和首次 Code 准备使用同一控制契约。部署与公开副本分别登记精确源码指纹，保留历史台账及首次公开快照。v1.4.8 存档的入口编译版本为 1.4.8.0。历史验收见 [验证记录](docs/VALIDATION.md)。
+
+现有部署升级后台宿主时，在同账号管理员 PowerShell 运行 `./Update-ClaudeSupervisorHost.ps1`。它保存旧宿主、部署和任务备份，在新守护完成连续两轮检查后返回结果。预检及中断恢复见 [部署说明](docs/DEPLOYMENT.md#升级已部署的后台宿主)。
 
 ## 能力
 
@@ -46,6 +48,7 @@ pwsh -NoProfile -File .\Test-ClaudeDesktopUpdate.ps1
 pwsh -NoProfile -File .\Test-ClaudeMaintenance.ps1
 pwsh -NoProfile -File .\Test-ClaudeSupervisorHealth.ps1
 pwsh -NoProfile -File .\Test-ClaudeLifecycle.ps1
+pwsh -NoProfile -File .\Test-ClaudeSupervisorHostUpgrade.ps1
 pwsh -NoProfile -File .\Test-ClaudeVersionInfo.ps1
 pwsh -NoProfile -File .\Test-ClaudeNodePool.ps1
 pwsh -NoProfile -File .\Test-ClaudeProxyTracking.ps1

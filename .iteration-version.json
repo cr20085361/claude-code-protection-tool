@@ -5,8 +5,8 @@
     "recorded_at": "2026-10-01T12:03:55+08:00",
     "version_source": null
   },
-  "current_version": "v1.7.0",
-  "completed_iterations": 26,
+  "current_version": "v1.7.1",
+  "completed_iterations": 27,
   "history": [
     {
       "id": "1ed80264-8644-40fd-a830-3d725048fa07",
@@ -842,6 +842,39 @@
         "scope": "root-source-and-AGENTS-v1",
         "sha256": "7bf5061be316c8c231b1017f41fff94e30df73235fe541b50458bf707adaec63",
         "file_count": 77
+      }
+    },
+    {
+      "id": "63e43383-cf3a-4dbd-914c-0dce6f09be70",
+      "from_version": "v1.7.0",
+      "to_version": "v1.7.1",
+      "level": "patch",
+      "summary": "固化后台宿主升级、按已知磁盘身份回滚和当次健康核验流程",
+      "verification": "Host upgrade fixture: 9 cases passed, including stale health, mixed-state recovery and unknown hashes. Real same-account uninstall/reinstall passed (123 old owned rules removed, 15 current rules installed). Formal host upgrade verified a new RunId and two safety/egress cycles, 2 probes, protected files, running host executable path and approved hash. Installed launcher 1.7.1.0/UI v1.7.1, Check, native window (13) and health contracts (26 C# and PS) passed.",
+      "recorded_at": "2026-11-14T18:25:32.3800987+08:00",
+      "local_evidence": [
+        {
+          "path": "private/formal-host-iteration-20261114-174236/host-upgrade-tests.json",
+          "sha256": "715154b707378ef42e67f44b006669240ebede462276d8435a6e87ce1004e6e7"
+        },
+        {
+          "path": "private/formal-host-iteration-20261114-174236/reinstall-result.json",
+          "sha256": "5097ea4ce6f2aa7dd73649dc4c33ad5744f3e69173cbfae2aaf3d8bc18d36048"
+        },
+        {
+          "path": "private/formal-host-iteration-20261114-174236/live-entry-check.json",
+          "sha256": "257ea9659848f17ad41a0cf4a2200badfccdeb4123a373203c9138bfc54c965d"
+        },
+        {
+          "path": "private/formal-host-iteration-20261114-174236/version-window.json",
+          "sha256": "3b4f6380368a41eb69205c1a802c200b7898b1c936c6f9970a5541b547fb0fd8"
+        }
+      ],
+      "source_fingerprint": {
+        "algorithm": "sha256",
+        "scope": "root-source-and-AGENTS-v1",
+        "sha256": "cfe041044cef9094e63c8879fbc4036f6ebf88edf203775bc94eac67fbb03326",
+        "file_count": 79
       }
     }
   ],
