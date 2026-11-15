@@ -94,7 +94,7 @@ if($Scenario -eq 'fatal-recovery-state'){[IO.File]::WriteAllText((Get-GuardPath 
 if($Scenario -eq 'existing-proxy-during-restart-backoff'){Write-GuardJson (Get-GuardPath 'private\proxy-recovery.json') @{SchemaVersion=1;RestartTimes=@([datetime]::UtcNow.ToString('o'));NextRestart=[datetime]::UtcNow.AddMinutes(5).ToString('o');ConsecutiveEgressFailures=0;NextProbe=[datetime]::UtcNow.AddSeconds(-1).ToString('o')}}
 '@
         $footer=@'
-}finally{Write-GuardJson (Get-GuardPath 'counts.json') @{StoppedProxy=$script:StoppedProxy;StoppedRuntime=$script:StoppedRuntime;StartedProxy=$script:StartedProxy;EgressCalls=$script:EgressCalls;PolicyCalls=$script:PolicyCalls;HealthSnapshots=$script:HealthSnapshots;NextSafetyUtc=$nextSafetyCheck.ToUniversalTime().ToString('o');NextSafetyTicks=$nextSafetyCheck.Ticks;NextProbeTicks=$nextProbe.Ticks}}
+}finally{Write-GuardJson (Get-GuardPath 'counts.json') @{StoppedProxy=$script:StoppedProxy;StoppedRuntime=$script:StoppedRuntime;StartedProxy=$script:StartedProxy;EgressCalls=$script:EgressCalls;PolicyCalls=$script:PolicyCalls;HealthSnapshots=$script:HealthSnapshots;NextSafetyUtc=$nextSafetyCheck.ToUniversalTime().ToString('o');SafetyStartTicks=if($safetyStarted){$safetyStarted.Ticks}else{0};NextSafetyTicks=$nextSafetyCheck.Ticks;NextProbeTicks=$nextProbe.Ticks}}
 '@
         [IO.File]::WriteAllText($wrapper,$header+$newLine+'try{'+$newLine+$body+$newLine+$footer)
         $output=& $shell -NoProfile -File $wrapper -Fixture $fixture -Scenario $scenario 2>&1
@@ -130,7 +130,7 @@ if($Scenario -eq 'existing-proxy-during-restart-backoff'){Write-GuardJson (Get-G
         $preparing=@($counts.HealthSnapshots|Where-Object {$_.Status -in @('Healthy','ProbeDegraded') -and (-not $_.LastSafetyCheck -or -not $_.LastEgressCheck -or ([datetime]$_.LastSafetyCheck).ToUniversalTime() -lt ([datetime]$_.SupervisorStarted).ToUniversalTime() -or ([datetime]$_.LastEgressCheck).ToUniversalTime() -lt ([datetime]$_.SupervisorStarted).ToUniversalTime())}).Count -eq 0
         if(-not $passed -or -not $contract -or -not $preparing){throw ('Supervisor decision regression failed: '+$scenario+' health='+($health|ConvertTo-Json -Compress)+' counts='+($counts|ConvertTo-Json -Compress -Depth 3))}
         if($scenario -eq 'healthy-current-run'){
-            if([long]$counts.NextSafetyTicks -ne ([datetimeoffset]$health.LastSafetyCheck).UtcDateTime.AddSeconds(60).Ticks -or [long]$counts.NextProbeTicks -ne ([datetimeoffset]$health.LastEgressCheck).UtcDateTime.AddSeconds(60).Ticks){throw 'UTC completion strings shifted the next check schedule into local clock ticks.'}
+            if([long]$counts.NextSafetyTicks -ne ([long]$counts.SafetyStartTicks+[timespan]::FromSeconds(60).Ticks) -or [long]$counts.NextProbeTicks -ne ([datetimeoffset]$health.LastEgressCheck).UtcDateTime.AddSeconds(60).Ticks){throw 'UTC completion strings shifted the next check schedule into local clock ticks.'}
             $results+=@{Scenario='utc-next-check-schedule';Passed=$true;SafetyIntervalSeconds=60;EgressIntervalSeconds=60}
         }
         if($scenario -eq 'failed-start-persisted'){

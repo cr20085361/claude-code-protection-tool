@@ -5,8 +5,8 @@
     "recorded_at": "2026-10-01T12:03:55+08:00",
     "version_source": null
   },
-  "current_version": "v1.7.2",
-  "completed_iterations": 28,
+  "current_version": "v1.8.0",
+  "completed_iterations": 31,
   "history": [
     {
       "id": "1ed80264-8644-40fd-a830-3d725048fa07",
@@ -941,6 +941,173 @@
         "sha256": "a0bf406a90178145908c77233816fca55c03934f426ec9349c59de7f8d570e25",
         "file_count": 79
       }
+    },
+    {
+      "id": "a13f7044-5226-458f-9ad6-f8183605055b",
+      "from_version": "v1.7.2",
+      "to_version": "v1.7.3",
+      "level": "patch",
+      "summary": "修复风险评分与防护暂停、维护状态的界面提示冲突，纠正已安装客户端的维护失败恢复指引",
+      "verification": "候选入口原生隔离状态一致性、版本窗口、更新窗口、维护窗口及 PowerShell/C# 健康契约检查通过。仅替换入口；真实缓存维护未执行，现有 SafetyHold 保留。实际部署和代理连续性核验另存本轮 private 证据。",
+      "recorded_at": "2026-11-15T14:42:27.424317+08:00",
+      "source_fingerprint": {
+        "algorithm": "sha256",
+        "scope": "root-source-and-AGENTS-v1",
+        "sha256": "1a9ab58083ff7bde0f0899a37cf44de4b272d062743a815a514a220a170d92af",
+        "file_count": 80
+      },
+      "local_evidence": [
+        {
+          "path": "private/ui-status-repair-20261115-143750/baseline.json",
+          "sha256": "2103913180a69ee0e27f26dcfeeb2137b0a068e631fc905f7da04d61a7cd77ac"
+        },
+        {
+          "path": "private/ui-status-repair-20261115-143750/cache-timeout-diagnosis.md",
+          "sha256": "168adb8daacc61634734967a497822d5b97afa29b89c7604562e0baea17ffe70"
+        },
+        {
+          "path": "private/ui-status-repair-20261115-143750/candidate-status.json",
+          "sha256": "0f171526e4ebb4e247dba9e76ccb291aa98124f542c5a2f1262a5ed6d69ff2b6"
+        },
+        {
+          "path": "private/ui-status-repair-20261115-143750/candidate-health.json",
+          "sha256": "25df21cd8b2d29e8d53c299eb117f81a778a9047237928ae3cff3dbcc8620bd4"
+        },
+        {
+          "path": "private/ui-status-repair-20261115-143750/version-window.json",
+          "sha256": "6b7f0a269e8c04e7b47179da36a557f7087e97a305938f001db18c6b6900012f"
+        },
+        {
+          "path": "private/ui-status-repair-20261115-143750/desktop-update-window.json",
+          "sha256": "7661382b3ef677e7eed43deb32644957ee58d96a852f4e58a9213d041b7264da"
+        },
+        {
+          "path": "private/ui-status-repair-20261115-143750/maintenance-window.json",
+          "sha256": "9ae14c65ab71eeac2ba3640bba74a84bfb073d831c706b38d39679a2ea6fe354"
+        }
+      ]
+    },
+    {
+      "id": "9d04aa98-4968-479c-819d-206adfa75667",
+      "from_version": "v1.7.3",
+      "to_version": "v1.7.4",
+      "level": "patch",
+      "summary": "修复缓存双上下文与首轮守护等待的预算不匹配，保留完整核验、阶段证据与共享代理运行，并正确显示后续维护恢复",
+      "verification": "37 项预算、21 项缓存协调、5 项缓存权限顺序、60 项 PowerShell/10 项 C# 维护、94 项更新、144 项状态窗口、13 项版本窗口、79 项更新窗口、10 项原生维护窗口及 PowerShell/C# 各 26 项健康契约通过。实际维护 4188b930c69744d58c45f6e8f7b9afd4 成功，双上下文缓存各约 155/158 秒，首轮守护等待约 158 秒，总计 845.56 秒；恢复后同一 RunId 两轮当次安全和双站出口核验通过，共享代理身份和配置保留。首次实机缓存成功后旧 90 秒等待回滚的证据保留；慢复核期间曾出现检查记录超过 120 秒而待核验，不将两轮通过宣称为全程持续就绪。入口安装及真实窗口验收另存本轮 private 目录。",
+      "recorded_at": "2026-11-15T17:38:31.379500+08:00",
+      "source_fingerprint": {
+        "algorithm": "sha256",
+        "scope": "root-source-and-AGENTS-v1",
+        "sha256": "bc8be3dfe74775af1f4767ff671faca85af791731ac092ec69579d8b5e9aad19",
+        "file_count": 83
+      },
+      "local_evidence": [
+        {
+          "path": "private/cache-maintenance-repair-20261115-164054/baseline.json",
+          "sha256": "542d18a17dbf3e9734be6b03da684d001c14257a6ae509ff219cd149af8790c3"
+        },
+        {
+          "path": "private/cache-maintenance-repair-20261115-164054/previous-result.json",
+          "sha256": "f99c2503f805cabb8e96e0568bc3568d616f276149a53378a661d4a871711f68"
+        },
+        {
+          "path": "private/cache-maintenance-repair-20261115-164054/code-cache-regression.json",
+          "sha256": "0cc2b8c7ff618c82bfffd1daf263ff880ca3cce11b26122c190eb82e12c6450a"
+        },
+        {
+          "path": "private/cache-maintenance-repair-20261115-164054/cache-budget-regression.json",
+          "sha256": "aaea85f914d45783499d212ee9b1066178ad83e2e0cdb7b2c66287c2eda96a10"
+        },
+        {
+          "path": "private/cache-maintenance-repair-20261115-164054/cache-context-regression.json",
+          "sha256": "d58afcb862227a39791259d54929f7a2b736fecacc78ef23af931e7cdab7f502"
+        },
+        {
+          "path": "private/cache-maintenance-repair-20261115-164054/maintenance-readiness-regression.json",
+          "sha256": "5f74a079caa77f82ee82cacba93e00da34518aa0754569371f1935e28ee5d6ae"
+        },
+        {
+          "path": "private/cache-maintenance-repair-20261115-164054/final-desktop-update.json",
+          "sha256": "e706325ef73e8832b4ce779f365c7662a9f0c68299c1edfc4320e2290e137af7"
+        },
+        {
+          "path": "private/cache-maintenance-repair-20261115-164054/final-candidate-status.json",
+          "sha256": "6d7e9ba35832e3cf70bad5d42393d9b3658169eb4c494f66bce154899c4db990"
+        },
+        {
+          "path": "private/cache-maintenance-repair-20261115-164054/final-candidate-health.json",
+          "sha256": "af7afddf2766f63eb7e47d1e38e1b6714ab94915ad9fc63bc418a1a229570f5b"
+        },
+        {
+          "path": "private/cache-maintenance-repair-20261115-164054/final-version-window.json",
+          "sha256": "6b7f0a269e8c04e7b47179da36a557f7087e97a305938f001db18c6b6900012f"
+        },
+        {
+          "path": "private/cache-maintenance-repair-20261115-164054/final-desktop-window.json",
+          "sha256": "7661382b3ef677e7eed43deb32644957ee58d96a852f4e58a9213d041b7264da"
+        },
+        {
+          "path": "private/cache-maintenance-repair-20261115-164054/final-maintenance-window.json",
+          "sha256": "9ae14c65ab71eeac2ba3640bba74a84bfb073d831c706b38d39679a2ea6fe354"
+        },
+        {
+          "path": "private/cache-maintenance-repair-20261115-164054/actual-maintenance-result.json",
+          "sha256": "10104a0b812081db0b1c10db27b4f06e9021ff92af99c5caf666c37eff999869"
+        },
+        {
+          "path": "private/cache-maintenance-repair-20261115-164054/restored-health-rounds.json",
+          "sha256": "4f1ea71f85ae05a93e62a2ccb74917ee20caa61b532929160407bf5fdc1e06f9"
+        },
+        {
+          "path": "private/cache-maintenance-repair-20261115-164054/root-cause-verification.json",
+          "sha256": "172bf7341a52b1f7fc662851cacbc8d98fac0805e9d838a4ca48855ee55e09f2"
+        }
+      ]
+    },
+    {
+      "id": "7e41ddc4-00fa-4679-9500-ca1109bc1422",
+      "from_version": "v1.7.4",
+      "to_version": "v1.8.0",
+      "level": "minor",
+      "summary": "优化完整防火墙复核与安全检查调度，网络风险评分新增最近检查时间",
+      "verification": "候选对本机 ActiveStore、过滤器及 Code 通过完整核验；规则错配、缺失与重复反例，39 项守护决策、原生状态窗口、版本窗口及两端健康契约通过。部署后真实周期、代理和窗口验收保存于本轮本机证据目录。",
+      "recorded_at": "2026-11-15T20:41:50.831715+08:00",
+      "source_fingerprint": {
+        "algorithm": "sha256",
+        "scope": "root-source-and-AGENTS-v1",
+        "sha256": "a1e033588df50215dd0f23a71096c666e2b8d9b515ddeaa4d558427aef961feb",
+        "file_count": 84
+      },
+      "local_evidence": [
+        {
+          "path": "private/rule-review-20261115-203513/baseline.json",
+          "sha256": "f59fdc007875ad5c2ee6c730ca253392b55e6078a2950e699c419b39f6c0c398"
+        },
+        {
+          "path": "private/rule-review-20261115-203513/status.json",
+          "sha256": "f32a7d6372dc9a0b622c1d7b74e648a4069905c108f0f03009f0f45bc7587396"
+        },
+        {
+          "path": "private/rule-review-20261115-203513/live-candidate-firewall.json",
+          "sha256": "a2cdccbda2d0db8affab17b696624deeed60489c96bc9458662c65e929963c89"
+        },
+        {
+          "path": "private/rule-review-20261115-203513/firewall-fixture.json",
+          "sha256": "0d85b14df416dded7f7dbb6aabe6e60e851835296744fa36f87bfb32d750e5a1"
+        },
+        {
+          "path": "private/rule-review-20261115-203513/stage/evidence/supervisor-decision-regression.json",
+          "sha256": "baae17c6de9c35ebbb196c404d6a56970121629f99121a21e82f687b1acc7e80"
+        },
+        {
+          "path": "private/rule-review-20261115-203513/stage/evidence/supervisor-health-regression.json",
+          "sha256": "04c2fa71085bb63d3de10ff0e124c9e100b995131129505c3244efed28b94768"
+        },
+        {
+          "path": "private/rule-review-20261115-203513/stage/evidence/version-window-regression.json",
+          "sha256": "6b7f0a269e8c04e7b47179da36a557f7087e97a305938f001db18c6b6900012f"
+        }
+      ]
     }
   ],
   "merged_local_lineage": {

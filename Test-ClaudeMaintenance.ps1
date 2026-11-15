@@ -10,7 +10,14 @@ $checks=[Collections.Generic.List[string]]::new()
 $source=Get-Content -LiteralPath (Join-Path $project 'Update-ClaudeGuard.ps1') -Raw
 $source=$source.Replace('exit 0','return').Replace('exit 1','return')
 [IO.File]::WriteAllText((Join-Path $fixture 'Update-ClaudeGuard.ps1'),$source,[Text.UTF8Encoding]::new($false))
-[IO.File]::WriteAllText((Join-Path $fixture 'Repair-ClaudeCodeContext-Admin.ps1'),'$global:LASTEXITCODE=0',[Text.UTF8Encoding]::new($false))
+$cacheFixtureSource=@'
+param([switch]$AdministratorContext,[datetimeoffset]$DeadlineUtc)
+$global:MaintenanceFixtureCacheCalls.Add([pscustomobject]@{AdministratorContext=[bool]$AdministratorContext;DeadlineUtc=$DeadlineUtc;StartedAt=[datetimeoffset]::UtcNow})
+$global:MaintenanceFixtureCalls.Add($(if($AdministratorContext){'cache-administrator'}else{'cache-desktop'}))
+$global:LASTEXITCODE=0
+[pscustomobject]@{Context=$(if($AdministratorContext){'Administrator'}else{'Desktop'});Success=$true;OperationId=[guid]::NewGuid().ToString('N');ElapsedMilliseconds=1}
+'@
+[IO.File]::WriteAllText((Join-Path $fixture 'Repair-ClaudeCodeContext-Admin.ps1'),$cacheFixtureSource,[Text.UTF8Encoding]::new($false))
 try {
 & (Get-Module ClaudeGuard) {
 param($Fixture,$Checks,$Project)
@@ -27,6 +34,13 @@ function Get-GuardDesktop {[pscustomobject]@{Version='fixture-desktop';Path=(Get
 function Get-GuardSupervisorSnapshot {[pscustomobject]@{Ready=$true;Kind='Healthy';Health=[pscustomobject]@{Time=[datetime]::UtcNow.ToString('o');RunId='fixture-run'}}}
 function Test-GuardLocalCodeAcceptance {$false}
 $global:MaintenanceFixtureCalls=[Collections.Generic.List[string]]::new()
+$global:MaintenanceFixtureCacheCalls=[Collections.Generic.List[object]]::new()
+$global:MaintenanceFixtureReadinessCalls=[Collections.Generic.List[object]]::new()
+$fixtureWriteGuardJson=${function:Write-GuardJson}
+function Write-GuardJson([string]$Path,$Value) {
+    if($global:MaintenanceFixtureProgressWriteFailure -and $Path.EndsWith('.progress.json',[StringComparison]::OrdinalIgnoreCase)){throw 'injected-progress-write-failure'}
+    & $fixtureWriteGuardJson $Path $Value
+}
 function Get-ScheduledTask {[pscustomobject]@{State=$(if($global:MaintenanceFixtureDisabled){'Ready'}else{'Running'});Settings=[pscustomobject]@{Enabled=(-not $global:MaintenanceFixtureDisabled)}}}
 function Assert-GuardSupervisorTask {}
 function Export-ScheduledTask {'<fixture-task/>'}
@@ -54,9 +68,15 @@ function Assert-GuardFirewall {}
 function Install-GuardFirewall {if($global:MaintenanceFixtureFailure -eq 'firewall'){throw 'injected-firewall-failure'};Write-GuardJson (Get-GuardPath 'private\firewall.json') @{Rules=@()}}
 function Install-GuardDesktopUserPolicy {if($global:MaintenanceFixtureFailure -eq 'policy'){throw 'injected-policy-failure'}}
 function Test-GuardEgress {[pscustomobject]@{VerifiedProbeCount=2}}
-function Wait-GuardSupervisorReady {if($global:MaintenanceFixtureFailure -eq 'readiness'){throw 'injected-readiness-failure'};[pscustomobject]@{Status='Healthy'}}
+function Wait-GuardSupervisorReady {
+    param([int]$TimeoutSeconds=90,[datetime]$DeadlineUtc=[datetime]::MaxValue)
+    $global:MaintenanceFixtureReadinessCalls.Add([pscustomobject]@{TimeoutSeconds=$TimeoutSeconds;DeadlineUtc=[datetimeoffset]$DeadlineUtc})
+    $global:MaintenanceFixtureCalls.Add(('wait-ready-'+$TimeoutSeconds))
+    if($global:MaintenanceFixtureFailure -eq 'readiness'){throw 'injected-readiness-failure'}
+    [pscustomobject]@{Status='Healthy'}
+}
 function Reset-State {
-    $global:MaintenanceFixtureFailure='';$global:MaintenanceFixtureDisabled=$false;$global:MaintenanceFixtureCalls.Clear()
+    $global:MaintenanceFixtureFailure='';$global:MaintenanceFixtureDisabled=$false;$global:MaintenanceFixtureProgressWriteFailure=$false;$global:MaintenanceFixtureCalls.Clear();$global:MaintenanceFixtureCacheCalls.Clear();$global:MaintenanceFixtureReadinessCalls.Clear()
     foreach($name in @('active-version-maintenance.json','active-ui-action.json','safety-hold.json','maintenance.json')){$path=Get-GuardPath ('private\'+$name);if(Test-Path -LiteralPath $path){Remove-Item -LiteralPath $path}}
     foreach($file in @('desktop.exe','archive.bin','payload.exe')){[IO.File]::WriteAllText((Get-GuardPath $file),'fixture-only')}
     Write-GuardJson (Get-GuardPath 'private\proxy.json') @{fixture='fixed'}
@@ -136,12 +156,32 @@ foreach($failure in @('','firewall','policy','readiness')){
         Require ($result.Success -and $final.Status -eq 'Completed' -and $result.StageId -eq $final.StageId -and $result.ActionId -eq $final.ActionId) 'real-install-branch-success-correlates-result-and-operation'
         Require ((Read-GuardJson (Get-GuardPath 'evidence\last-ui-result.json')).Success) 'real-install-terminal-ui-evidence-is-success'
         Require (-not (Test-Path -LiteralPath (Get-GuardPath 'private\maintenance.json'))) 'success-clears-own-maintenance-marker'
+        Require ($result.BudgetSeconds -eq 1200 -and $result.RecoveryReserveSeconds -eq 120) 'installer-keeps-finite-total-budget-and-recovery-reserve'
+        $cacheCalls=$global:MaintenanceFixtureCacheCalls.ToArray()
+        Require ($cacheCalls.Count -eq 2 -and $cacheCalls[0].AdministratorContext -and -not $cacheCalls[1].AdministratorContext) 'installer-verifies-administrator-and-desktop-caches-separately'
+        $deadline=[datetimeoffset]$result.DeadlineUtc
+        Require ((($deadline-$cacheCalls[0].DeadlineUtc).TotalSeconds -eq 720) -and (($deadline-$cacheCalls[1].DeadlineUtc).TotalSeconds -eq 420)) 'cache-deadlines-reserve-second-context-and-initial-guardian-safety-checks'
+        $started=[datetimeoffset]$result.StartedAt
+        Require ((($deadline-$started).TotalSeconds -ge 1199) -and (($deadline-$started).TotalSeconds -le 1201) -and (($cacheCalls[0].DeadlineUtc-$started).TotalSeconds -ge 479) -and (($cacheCalls[0].DeadlineUtc-$started).TotalSeconds -le 481) -and (($cacheCalls[1].DeadlineUtc-$started).TotalSeconds -ge 779) -and (($cacheCalls[1].DeadlineUtc-$started).TotalSeconds -le 781)) 'cache-context-deadlines-are-480-and-780-seconds-after-migration-start'
+        Require ((($deadline.AddSeconds(-120)-$cacheCalls[1].DeadlineUtc).TotalSeconds -eq 300)) 'final-safety-restore-and-readiness-retain-300-second-reserve'
+        $readiness=$global:MaintenanceFixtureReadinessCalls.ToArray()
+        Require ($readiness.Count -eq 2 -and $readiness[0].TimeoutSeconds -eq 180 -and $readiness[1].TimeoutSeconds -eq 90 -and (($deadline-$readiness[0].DeadlineUtc).TotalSeconds -eq 120) -and (($deadline-$readiness[1].DeadlineUtc).TotalSeconds -eq 120)) 'initial-and-final-readiness-share-total-work-deadline'
+        Require ($global:MaintenanceFixtureCalls.IndexOf('resume') -lt $global:MaintenanceFixtureCalls.IndexOf('wait-ready-180') -and $global:MaintenanceFixtureCalls.IndexOf('wait-ready-180') -lt $global:MaintenanceFixtureCalls.IndexOf('start-proxy') -and $global:MaintenanceFixtureCalls.IndexOf('start-proxy') -lt $global:MaintenanceFixtureCalls.IndexOf('wait-ready-90')) 'initial-180-second-readiness-precedes-retained-proxy-validation'
+        Require ('AwaitInitialSupervisorReady' -in @($result.Phases.Phase) -and 'VerifyRestoredProxy' -in @($result.Phases.Phase)) 'initial-readiness-and-proxy-validation-have-distinct-phase-evidence'
+        Require ($global:MaintenanceFixtureCalls.IndexOf('cache-administrator') -lt $global:MaintenanceFixtureCalls.IndexOf('cache-desktop') -and $result.CacheRepairResults.Count -eq 2) 'both-cache-context-results-are-retained-in-execution-order'
     }else{
         Require (-not $result.Success -and $result.RollbackRestored -and -not $result.RollbackError -and $final.Status -eq 'Failed') ('real-install-'+$failure+'-failure-rolls-back')
         Require (((Get-GuardHash (Get-GuardPath 'private\deployment.json')) -eq $f.OldStateHash) -and 'restore-task' -in $global:MaintenanceFixtureCalls -and 'start' -in $global:MaintenanceFixtureCalls) ('real-install-'+$failure+'-restores-baseline-and-task')
         Require (Test-Path -LiteralPath (Get-GuardPath 'private\safety-hold.json')) ('real-install-'+$failure+'-remains-fail-closed')
     }
 }
+$f=Prepare-FixtureInstall;$global:MaintenanceFixtureFailure='firewall';$global:MaintenanceFixtureProgressWriteFailure=$true
+$null=& (Get-GuardPath 'Update-ClaudeGuard.ps1') -Install -StageFile $f.Stage -StageHash $f.StageHash -ResultFile $f.Result -OperationId $f.Id
+$result=Read-GuardJson $f.Result;$final=Read-GuardMaintenanceOperation $f.Id
+Require (-not $result.Success -and $result.RollbackRestored -and -not $result.RollbackError -and $final.Status -eq 'Failed') 'progress-write-failure-does-not-skip-real-firewall-failure-recovery'
+Require ($result.Reason -eq 'injected-firewall-failure' -and $final.Reason.Contains('injected-firewall-failure')) 'progress-diagnostic-failure-retains-original-migration-reason'
+Require ($result.ProgressWriteErrors.Count -gt 0 -and @($result.ProgressWriteErrors|Where-Object {$_ -ne 'injected-progress-write-failure'}).Count -eq 0) 'progress-write-errors-remain-inspectable-in-terminal-result'
+Require (((Get-GuardHash (Get-GuardPath 'private\deployment.json')) -eq $f.OldStateHash) -and 'restore-task' -in $global:MaintenanceFixtureCalls -and 'start' -in $global:MaintenanceFixtureCalls -and (Test-Path -LiteralPath (Get-GuardPath 'private\safety-hold.json'))) 'progress-write-failure-restores-baseline-task-and-fail-closed-state'
 $f=Prepare-FixtureInstall
 $null=Set-GuardMaintenanceOperation $f.Id @{DesktopDownloadId=([guid]::NewGuid().ToString('N'))}
 $null=& (Get-GuardPath 'Update-ClaudeGuard.ps1') -Install -StageFile $f.Stage -StageHash $f.StageHash -ResultFile $f.Result -OperationId $f.Id -ContinueDesktopUpdate
@@ -197,6 +237,8 @@ Require $true 'reviewed-maintenance-can-retry-after-recovery'
 $null=Reset-State
 $prepareText=Get-Content -LiteralPath (Join-Path $Project 'Update-ClaudeGuard.ps1') -Raw
 $tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseInput($prepareText,[ref]$tokens,[ref]$errors)
+$hashLists=@($ast.FindAll({param($node)$node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$files'},$true))
+Require ($hashLists.Count -eq 1 -and 'ClaudeGuard-CacheRepair.psm1' -in @($hashLists[0].Right.FindAll({param($node)$node -is [Management.Automation.Language.StringConstantExpressionAst]},$true)|ForEach-Object {$_.Value})) 'reviewed-stage-hash-list-includes-cache-repair-budget-module'
 $networkBranch=@($ast.FindAll({param($node)$node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text.StartsWith('if(-not (Test-Path (Get-GuardPath ''private\safety-hold.json''))') -and $node.Extent.Text.Contains('DesktopTaskSnapshot')},$true))
 Require ($networkBranch.Count -eq 1) 'desktop-update-preparation-network-branch-located'
 $compressed=Get-GuardPath 'private\fixture-cached-code.zst'

@@ -142,6 +142,7 @@ try {
             $proxyPid=(Read-GuardJson (Get-GuardPath 'private\proxy-process.json')).Pid
             if(-not $owned){$owned=Get-Process -Id $proxyPid;$null=$owned.Handle;Write-SupervisorEvent 'ProxyAdopted' @{Pid=$proxyPid}}
             if($now -ge $nextSafetyCheck -or -not $lastSafetyCheck){
+                $safetyStarted=[datetime]::UtcNow
                 Assert-GuardPolicy -RuntimeOnly
                 Complete-SupervisorPhase
                 Set-SupervisorPhase 'Firewall';Assert-GuardFirewall;Complete-SupervisorPhase
@@ -149,7 +150,7 @@ try {
                 $runtime=Get-GuardRuntimeSafety;$activeCodeCount=$runtime.CodeProcessCount
                 Write-GuardJson (Get-GuardPath 'private\runtime-safety.json') $runtime
                 if(-not $runtime.Safe){Stop-GuardUnsafeRuntime $runtime;throw ('Runtime safety mismatch: '+($runtime.Issues -join ','))}
-                $lastSafetyCheck=[datetime]::UtcNow.ToString('o');$nextSafetyCheck=([datetime]$lastSafetyCheck).ToUniversalTime().AddSeconds(60)
+                $lastSafetyCheck=[datetime]::UtcNow.ToString('o');$nextSafetyCheck=$safetyStarted.AddSeconds(60)
                 Complete-SupervisorPhase
             }else{Complete-SupervisorPhase}
             if([datetime]::UtcNow -ge $nextProbe){

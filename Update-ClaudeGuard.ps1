@@ -42,10 +42,22 @@ if($Install) {
     if(-not (Test-GuardAdmin)){throw 'Administrator rights are required for reviewed version migration.'}
     $StageFile=Assert-PrivateFile $StageFile '^upgrade-stage-[0-9a-f]{32}\.json$'
     $ResultFile=Assert-PrivateFile $ResultFile '^upgrade-result-[0-9a-f]{32}\.json$'
-    $result=[ordered]@{Time=(Get-Date -Format o);StartedAt=[datetime]::UtcNow.ToString('o');CompletedAt=$null;ActionId=$OperationId;StageId=$null;Success=$false;Reason=$null;DesktopVersion=$null;CodeVersion=$null;SupervisorInstalled=$false;UpdatePolicyInstalled=$false;RollbackRestored=$false;RollbackError=$null}
-    $budgetEnd=[datetime]::UtcNow.AddSeconds(600)
+    $result=[ordered]@{Time=(Get-Date -Format o);StartedAt=[datetime]::UtcNow.ToString('o');CompletedAt=$null;ActionId=$OperationId;StageId=$null;Success=$false;Reason=$null;DesktopVersion=$null;CodeVersion=$null;SupervisorInstalled=$false;UpdatePolicyInstalled=$false;RollbackRestored=$false;RollbackError=$null;BudgetSeconds=1200;RecoveryReserveSeconds=120;CurrentPhase=$null;Phases=@();CacheRepairResults=@();ProgressWriteErrors=@()}
+    $budgetEnd=[datetime]::UtcNow.AddSeconds(1200)
+    $migrationClock=[Diagnostics.Stopwatch]::StartNew()
+    $result['DeadlineUtc']=$budgetEnd.ToString('o')
     $installer=Get-GuardMaintenanceLock 'Install';$installerHeld=$false;$operationClaimed=$false
-    function Assert-MigrationBudget {if([datetime]::UtcNow -ge $budgetEnd){throw 'MaintenanceTimeout: 管理员安装阶段超过 600 秒，已进入失败恢复。'}}
+    function Assert-MigrationBudget {
+        if([datetime]::UtcNow -ge $budgetEnd.AddSeconds(-120) -or $migrationClock.Elapsed.TotalSeconds -ge 1080){throw 'MaintenanceTimeout: 管理员安装阶段已达到工作预算，为失败恢复保留 120 秒。'}
+    }
+    function Set-MigrationPhase([string]$Name,[switch]$Recovery) {
+        if(-not $Recovery){Assert-MigrationBudget}
+        if($result.Phases.Count){$result.Phases[-1].CompletedAt=[datetime]::UtcNow.ToString('o');$result.Phases[-1].ElapsedMilliseconds=$migrationClock.ElapsedMilliseconds-$result.Phases[-1].StartedElapsedMilliseconds}
+        $result.CurrentPhase=$Name
+        $result.Phases+=@([ordered]@{Phase=$Name;StartedAt=[datetime]::UtcNow.ToString('o');StartedElapsedMilliseconds=$migrationClock.ElapsedMilliseconds;CompletedAt=$null;ElapsedMilliseconds=$null})
+        # 进度仅用于诊断；写入失败不得跳过真实恢复或改变安全检查结果。
+        try{Write-GuardJson ($ResultFile+'.progress.json') @{SchemaVersion=1;ActionId=$OperationId;StageId=$result.StageId;Phase=$Name;Reason=$result.Reason;Time=[datetime]::UtcNow.ToString('o');ElapsedMilliseconds=$migrationClock.ElapsedMilliseconds;DeadlineUtc=$budgetEnd.ToString('o')}}catch{$result.ProgressWriteErrors+=@($_.Exception.Message)}
+    }
     $oldState=$d
     $baselineChanged=$false;$priorTaskXml=$null;$priorTaskSnapshot=$null;$configBackup=$null;$candidate=$null
     try {
@@ -63,7 +75,7 @@ if($Install) {
             $self=[Diagnostics.Process]::GetCurrentProcess()
             $null=Set-GuardMaintenanceOperation $OperationId @{Phase='Migrating';WorkerPid=$PID;WorkerStarted=$self.StartTime.ToUniversalTime().ToString('o');WorkerPath=$self.MainModule.FileName}
         }
-        Assert-MigrationBudget
+        Set-MigrationPhase 'ValidateReviewedStage'
         if([datetimeoffset]::UtcNow -gt ([datetimeoffset]$stage.Created).AddHours(2)){throw 'Maintenance stage expired.'}
         foreach($file in $stage.ScriptHashes){if((Get-GuardHash (Get-GuardPath $file.Name)) -ne $file.Hash){throw 'Reviewed maintenance script changed.'}}
         if((Get-GuardHash (Get-GuardPath 'private\deployment.json')) -ne $stage.PreviousStateHash){throw 'Deployment changed after review.'}
@@ -101,6 +113,7 @@ if($Install) {
             $candidate|Add-Member -NotePropertyName UpdatePolicyBackup -NotePropertyValue @{Value=$value;Kind=if($null -ne $value){$policyKey.GetValueKind('disableAutoUpdates').ToString()}else{$null}}
         }
         Assert-MigrationBudget
+        Set-MigrationPhase 'SuspendDedicatedProtection'
         Write-GuardJson (Get-GuardPath 'private\maintenance.json') @{Until=$budgetEnd.AddSeconds(120).ToString('o');Reason='reviewed-version-migration';ActionId=$OperationId;StageId=$stage.Id}
         $priorRules=Read-GuardJson (Get-GuardPath 'private\firewall.json')
         # 更新链已在 MSIX 安装前暂停守护；回滚必须恢复暂停前的任务状态。
@@ -141,10 +154,12 @@ if($Install) {
         $candidate.Reliability.Installed=Get-Date -Format o
         if($OperationId){$null=Set-GuardMaintenanceOperation $OperationId @{BaselineChanged=$true}}
         $baselineChanged=$true;Write-GuardJson (Get-GuardPath 'private\deployment.json') $candidate
+        Set-MigrationPhase 'InstallFirewall'
         Install-GuardFirewall
         $fresh=Read-GuardJson (Get-GuardPath 'private\firewall.json')
         $fresh.Rules=@($fresh.Rules)+@($priorRules.Rules|Where-Object {$_.Name -notin @($fresh.Rules.Name)})
         Write-GuardJson (Get-GuardPath 'private\firewall.json') $fresh
+        Set-MigrationPhase 'PrepareCodeCaches'
         # Preserve the pre-migration ACL of newly covered cache roots for removal/rollback.
         $gateBackupPath=Get-GuardPath 'private\code-gate-backup.json'
         $gateBackup=Read-GuardJson $gateBackupPath
@@ -174,18 +189,24 @@ if($Install) {
         }
         New-ItemProperty -Path 'HKCU:\SOFTWARE\Policies\Claude' -Name disableAutoUpdates -PropertyType DWord -Value 1 -Force|Out-Null
         Assert-MigrationBudget
+        Set-MigrationPhase 'InstallDesktopPolicy'
         Install-GuardDesktopUserPolicy
         # 管理员真实缓存与交互式桌面缓存均须核验，避免一侧旧引擎遗漏执行拒绝。
         $cacheWorker=Join-Path $PSScriptRoot 'Repair-ClaudeCodeContext-Admin.ps1'
-        $cacheResult=Get-GuardPath ('private\cache-repair-'+[guid]::NewGuid().ToString('N')+'.json')
-        & $cacheWorker -Worker -ResultFile $cacheResult -ReviewedWorkerHash (Get-GuardHash $cacheWorker)
+        # 两次核验各最多 300 秒；为最终安全核验、恢复及首轮守护就绪留 300 秒，另留恢复预算。
+        Set-MigrationPhase 'AdministratorCacheCheck'
+        $adminCache=& $cacheWorker -AdministratorContext -DeadlineUtc $budgetEnd.AddSeconds(-720)
         if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Administrator cache permissions repair failed.'}
-        & (Join-Path $PSScriptRoot 'Repair-ClaudeCodeContext-Admin.ps1')
+        $result.CacheRepairResults+=@($adminCache)
+        Set-MigrationPhase 'DesktopCacheCheck'
+        $desktopCache=& $cacheWorker -DeadlineUtc $budgetEnd.AddSeconds(-420)
         if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Desktop cache permissions repair failed.'}
-        Assert-MigrationBudget
+        $result.CacheRepairResults+=@($desktopCache)
+        Set-MigrationPhase 'FinalSafetyVerification'
         Assert-GuardPolicy
         Test-CodeCacheGate
         Assert-GuardFirewall
+        Set-MigrationPhase 'RestoreSupervisor'
         Install-SupervisorTask $candidate $d
         $supervisorTaskInstalled=$true
         $result.SupervisorInstalled=$true;$result.UpdatePolicyInstalled=$true
@@ -194,17 +215,26 @@ if($Install) {
         if($OperationId){$null=Set-GuardMaintenanceOperation $OperationId @{Phase='Restarting'}}
         Assert-MigrationBudget
         Resume-GuardSupervisorTask -State $candidate
-        Start-GuardProxy -DeadlineUtc $budgetEnd
+        # 首轮完整策略、防火墙、运行环境及出口核验可能超过通用入口的 90 秒等待。
+        # 先等待同一完整就绪契约，再保留 Start-GuardProxy 的任务、配置与进程身份核验。
+        Set-MigrationPhase 'AwaitInitialSupervisorReady'
+        $null=Wait-GuardSupervisorReady -TimeoutSeconds 180 -DeadlineUtc $budgetEnd.AddSeconds(-120)
+        Set-MigrationPhase 'VerifyRestoredProxy'
+        Start-GuardProxy -DeadlineUtc $budgetEnd.AddSeconds(-120)
         if($OperationId){$null=Set-GuardMaintenanceOperation $OperationId @{Phase='Verifying'}}
+        Set-MigrationPhase 'VerifyEgress'
         $result['Egress']=Test-GuardEgress
-        $health=Wait-GuardSupervisorReady -TimeoutSeconds 90 -DeadlineUtc $budgetEnd
+        Set-MigrationPhase 'AwaitSupervisorReady'
+        $health=Wait-GuardSupervisorReady -TimeoutSeconds 90 -DeadlineUtc $budgetEnd.AddSeconds(-120)
         Assert-MigrationBudget
+        Set-MigrationPhase 'Completed'
         $result['DesktopSupervisorVerified']=$true
         $result.DesktopVersion=$candidate.Desktop.Version;$result.CodeVersion=$candidate.CodeGate.Version;$result.Success=$true
         $result.CompletedAt=[datetime]::UtcNow.ToString('o')
         Write-GuardJson (Get-GuardPath 'evidence\version-migration.json') $result
     } catch {
         $result.Reason=$_.Exception.Message
+        Set-MigrationPhase 'Rollback' -Recovery
         try {
             if($OperationId -and $operationClaimed){
                 $op=Read-GuardMaintenanceOperation $OperationId
@@ -225,6 +255,8 @@ if($Install) {
         # 新增阻断规则及尚未核准的缓存留在受保护状态，保留失败证据和恢复路径。
     } finally {
         $result.CompletedAt=[datetime]::UtcNow.ToString('o')
+        $result['ElapsedMilliseconds']=$migrationClock.ElapsedMilliseconds
+        if($result.Phases.Count){$result.Phases[-1].CompletedAt=$result.CompletedAt;$result.Phases[-1].ElapsedMilliseconds=$migrationClock.ElapsedMilliseconds-$result.Phases[-1].StartedElapsedMilliseconds}
         Write-GuardJson $ResultFile $result
         if($OperationId -and $operationClaimed){
             $phase=if($result.Success -and $ContinueDesktopUpdate){'PreparingInstall'}elseif($result.Success){'Completed'}else{'Failed'}
@@ -290,7 +322,7 @@ $configStage=Get-GuardPath ('private\proxy-stage-'+$id+'.json')
 Write-GuardJson $configStage (New-GuardIPv4Config (Read-GuardJson (Get-GuardPath 'private\proxy.json')))
 Test-GuardProxyConfiguration $configStage $d
 $candidate.ProxyConfigHash=Get-GuardHash $configStage
-$files=@('ClaudeGuard.psm1','ClaudeGuard-Lifecycle.ps1','ClaudeGuard-Health.ps1','ClaudeSupervisorHost.cs','runtime\ClaudeSupervisorHost.exe','runtime\ClaudeProGuard.exe','private\launcher-paths.txt','ClaudeCodeGate.psm1','ClaudeGuard-Supervisor-v2.ps1','ClaudeGuard-Runtime.psm1','Read-ClaudeProcessEnvironment.py','ClaudeGuard-UiBridge.ps1','Update-ClaudeGuard.ps1','Repair-ClaudeCodeContext-Admin.ps1','Install-ClaudeGuard.ps1','Read-DesktopCodeManifest.cjs','Expand-VerifiedCode.cjs','ClaudeGuard-VersionInfo.psm1','Get-ClaudeVersionInfo.ps1','ClaudeGuard-DesktopUpdate.psm1','Invoke-ClaudeDesktopUpdate.ps1')
+$files=@('ClaudeGuard.psm1','ClaudeGuard-Lifecycle.ps1','ClaudeGuard-Health.ps1','ClaudeSupervisorHost.cs','runtime\ClaudeSupervisorHost.exe','runtime\ClaudeProGuard.exe','private\launcher-paths.txt','ClaudeCodeGate.psm1','ClaudeGuard-Supervisor-v2.ps1','ClaudeGuard-Runtime.psm1','Read-ClaudeProcessEnvironment.py','ClaudeGuard-UiBridge.ps1','Update-ClaudeGuard.ps1','Repair-ClaudeCodeContext-Admin.ps1','ClaudeGuard-CacheRepair.psm1','Install-ClaudeGuard.ps1','Read-DesktopCodeManifest.cjs','Expand-VerifiedCode.cjs','ClaudeGuard-VersionInfo.psm1','Get-ClaudeVersionInfo.ps1','ClaudeGuard-DesktopUpdate.psm1','Invoke-ClaudeDesktopUpdate.ps1')
 $stage=[ordered]@{Id=$id;Created=(Get-Date -Format o);PreviousStateHash=(Get-GuardHash (Get-GuardPath 'private\deployment.json'));Candidate=$candidate;PayloadPath=$payload;Manifest=$m;ConfigStage=$configStage;ScriptHashes=@($files|ForEach-Object { @{Name=$_;Hash=(Get-GuardHash (Get-GuardPath $_))} })}
 $stagePath=Get-GuardPath ('private\upgrade-stage-'+$id+'.json')
 Write-GuardJson $stagePath $stage

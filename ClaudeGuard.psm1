@@ -504,7 +504,10 @@ function Get-GuardRuleName([string]$Path) {
 }
 function Assert-GuardRule([string]$Path) {
     $r=Get-NetFirewallRule -PolicyStore ActiveStore -Name (Get-GuardRuleName $Path) -ErrorAction Stop
-    $app=$r | Get-NetFirewallApplicationFilter
+    Confirm-DirectFirewallRule $r $Path
+}
+function Confirm-DirectFirewallRule($r,[string]$Path) {
+    $app=$r | Get-NetFirewallApplicationFilter -ErrorAction Stop
     $addr=$r | Get-NetFirewallAddressFilter
     $port=$r | Get-NetFirewallPortFilter
     if ($r.Enabled.ToString() -ne 'True' -or $r.Direction.ToString() -ne 'Outbound' -or $r.Action.ToString() -ne 'Block' -or $r.Profile.ToString() -ne 'Any' -or $app.Program -ne $Path -or $port.Protocol.ToString() -ne 'Any') { throw 'Firewall rule is incomplete or changed.' }
@@ -554,23 +557,45 @@ function Assert-GuardFirewall([switch]$DesktopOnly) {
     foreach ($p in Get-NetFirewallProfile -PolicyStore ActiveStore) { if ($p.Enabled.ToString() -ne 'True') { throw 'A firewall profile is disabled.' } }
     $current=Get-GuardDesktop
     if ($current.Path -ne $d.Desktop.Path -or $current.Version -ne $d.Desktop.Version -or $current.Hash -ne $d.Desktop.Hash) { throw 'Desktop updated; this version is not approved. Do not launch until coverage is refreshed.' }
-    Assert-GuardRule $current.Path
-    Assert-GuardSharedProxyBlock $current.Path
+    $paths=@($current.Path)
     if (-not $DesktopOnly) {
         if ($d.CodeCoverage -notin @('prepared','verified') -or @($d.CodePaths).Count -eq 0) { throw 'Actual local Code runtime coverage is not verified. Pro launcher is locked.' }
-        foreach ($p in $d.CodePaths) { Assert-GuardRule $p; Assert-GuardSharedProxyBlock $p }
+        $paths+=@($d.CodePaths)
+    }
+    # One live ActiveStore enumeration per invocation. Select by exact name before
+    # obtaining filters from each concrete rule object; never reuse a previous round.
+    $rules=@(Get-NetFirewallRule -PolicyStore ActiveStore -Name 'ClaudeProGuard*' -ErrorAction Stop)
+    foreach($path in $paths){
+        $name=Get-GuardRuleName $path
+        $direct=Select-UniqueFirewallRule $rules $name
+        Confirm-DirectFirewallRule $direct $path
+        foreach($protocol in 'TCP','UDP'){
+            $proxyName='ClaudeProGuardProxy-'+$protocol+'-'+$name.Substring('ClaudeProGuard-'.Length)
+            $proxyRule=Select-UniqueFirewallRule $rules $proxyName
+            Confirm-ProxyFirewallRule $proxyRule $path $protocol
+        }
+    }
+    if(-not $DesktopOnly){
         Import-Module (Join-Path $script:Root 'ClaudeCodeGate.psm1')
         Assert-CodePrepared
     }
+}
+function Select-UniqueFirewallRule($Rules,[string]$Name) {
+    $matches=@($Rules | Where-Object Name -eq $Name)
+    if($matches.Count -ne 1){throw "Firewall rule missing or ambiguous: $Name"}
+    $matches[0]
 }
 function Assert-GuardSharedProxyBlock([string]$Path) {
     foreach($protocol in @('TCP','UDP')) {
         $name=Get-GuardRuleName $Path
         $r=Get-NetFirewallRule -PolicyStore ActiveStore -Name ('ClaudeProGuardProxy-'+$protocol+'-'+$name.Substring('ClaudeProGuard-'.Length)) -ErrorAction Stop
-        $app=$r|Get-NetFirewallApplicationFilter;$port=$r|Get-NetFirewallPortFilter;$addr=$r|Get-NetFirewallAddressFilter
-        $loopbackOnly=(@($addr.RemoteAddress).Count -eq 1 -and @($addr.RemoteAddress)[0] -in @('127.0.0.0/8','127.0.0.0/255.0.0.0'))
-        if($r.Enabled.ToString() -ne 'True' -or $r.Action.ToString() -ne 'Block' -or $r.Direction.ToString() -ne 'Outbound' -or $r.Profile.ToString() -ne 'Any' -or $app.Program -ne $Path -or $port.Protocol.ToString() -ne $protocol -or @(Compare-Object @($port.RemotePort|Sort-Object) @('10808','10813')).Count -or -not $loopbackOnly){throw 'Shared proxy exclusion rule is missing or changed.'}
+        Confirm-ProxyFirewallRule $r $Path $protocol
     }
+}
+function Confirm-ProxyFirewallRule($r,[string]$Path,[string]$protocol) {
+    $app=$r|Get-NetFirewallApplicationFilter;$port=$r|Get-NetFirewallPortFilter;$addr=$r|Get-NetFirewallAddressFilter
+    $loopbackOnly=(@($addr.RemoteAddress).Count -eq 1 -and @($addr.RemoteAddress)[0] -in @('127.0.0.0/8','127.0.0.0/255.0.0.0'))
+    if($r.Enabled.ToString() -ne 'True' -or $r.Action.ToString() -ne 'Block' -or $r.Direction.ToString() -ne 'Outbound' -or $r.Profile.ToString() -ne 'Any' -or $app.Program -ne $Path -or $port.Protocol.ToString() -ne $protocol -or @(Compare-Object @($port.RemotePort|Sort-Object) @('10808','10813')).Count -or -not $loopbackOnly){throw 'Shared proxy exclusion rule is missing or changed.'}
 }
 function Get-GuardDesktopProcesses {
     $d=Get-GuardState

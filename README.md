@@ -2,9 +2,9 @@
 
 面向 **Windows x64、Claude Desktop 及其本地 Code 会话**的桌面安全入口。项目提供专用代理、防火墙与执行门禁核验、后台守护、版本显示，以及官方 Desktop 和配套 Code 的受控更新。
 
-当前源码基线：**v1.7.2 · 第 28 次源码迭代**。采用 [MIT 许可证](LICENSE)。本工具与 Anthropic 无隶属关系，不保证账号不受限制，也不改变服务的支持地区或使用政策。
+当前源码基线：**v1.8.0 · 第 31 次源码迭代**。采用 [MIT 许可证](LICENSE)。本工具与 Anthropic 无隶属关系，不保证账号不受限制，也不改变服务的支持地区或使用政策。
 
-本次公开存档包含 v1.4.6 的完整哈希顺序读取优化与 v1.4.7 的 Desktop 5.x 更新兼容修复：识别新版配套 Code 在托管 `disableAutoUpdates` 策略下提前返回的更新检查，下载、维护和首次 Code 准备使用同一控制契约。部署与公开副本分别登记精确源码指纹，保留历史台账及首次公开快照。v1.4.8 存档的入口编译版本为 1.4.8.0。历史验收见 [验证记录](docs/VALIDATION.md)。
+本次 v1.8.0 存档包含缓存维护预算修复、防火墙完整复核优化、安全检查调度改进和风险评分最近检查时间。实机连续三轮安全及双站出口检查通过。入口和宿主的 Windows x64 离线程序包随 Release 提供。
 
 现有部署升级后台宿主时，在同账号管理员 PowerShell 运行 `./Update-ClaudeSupervisorHost.ps1`。它保存旧宿主、部署和任务备份，在新守护完成连续两轮检查后返回结果。预检及中断恢复见 [部署说明](docs/DEPLOYMENT.md#升级已部署的后台宿主)。
 
@@ -73,7 +73,7 @@ pwsh -NoProfile -File .\Test-ClaudeIterationVersion.ps1
 | `ClaudeGuard-Runtime.psm1`、`Read-ClaudeProcessEnvironment.py` | 受保护进程身份、环境比较及连接核验 |
 | `ClaudeGuard-VersionInfo.psm1`、`Get-ClaudeVersionInfo.ps1` | 安装和运行版本观察、官方发布查询 |
 | `ClaudeGuard-DesktopUpdate.psm1`、`Invoke-ClaudeDesktopUpdate.ps1` | 官方包和配套 Code 下载核验、安装及维护接续 |
-| `Update-ClaudeGuard.ps1` | 版本防护迁移、备份、回滚与恢复 |
+| `Update-ClaudeGuard.ps1`、`Repair-ClaudeCodeContext-Admin.ps1`、`ClaudeGuard-CacheRepair.psm1` | 版本防护迁移、双上下文缓存检查、有限预算与阶段证据、备份及回滚恢复 |
 | `Read-DesktopCodeManifest.cjs`、`Expand-VerifiedCode.cjs` | 读取官方包内元数据、验证并解压配套 Code |
 
 入口与后台宿主的 Windows x64 离线程序包及 SHA256 校验文件见 [GitHub Releases](https://github.com/cr20085361/claude-code-protection-tool/releases)。安装文件后，按[部署说明](docs/DEPLOYMENT.md)完成当前机器的防护配置和验收。版本沿革见 [CHANGELOG.md](CHANGELOG.md) 和 [.iteration-version.json](.iteration-version.json)。[PUBLICATION.json](PUBLICATION.json) 保留首次 v1.3.0 公开同步的历史校验值。
@@ -85,3 +85,31 @@ pwsh -NoProfile -File .\Test-ClaudeIterationVersion.ps1
 修改核心安全门禁、生命周期、更新或回滚逻辑时，请提供对应隔离回归；真实桌面和跨机器结果分别报告，未运行的项目保留 `NOT_RUN`。
 
 公开存档与本机部署源码各有精确指纹，登记在同一次迭代的 `public_source_fingerprint` 和 `source_fingerprint`。版本检查会报告匹配的副本；两种副本的未登记改动或混用均不通过。`.gitattributes` 保留原始字节。公开副本不含本机原始证据，`-VerifyLocalEvidence` 仅供持有这些本机材料的部署使用。
+
+## 架构与运行流程
+
+```mermaid
+flowchart LR
+  A["安全入口与风险评分"] --> B["健康与生命周期契约"]
+  B --> C["后台宿主与守护"]
+  C --> D["专用代理与固定出口"]
+  C --> E["防火墙、Code 权限与运行环境"]
+  A --> F["官方更新与缓存维护"]
+```
+
+```mermaid
+flowchart TD
+  A["打开安全入口"] --> B["风险评分与当次守护核验"]
+  B --> C{"检查通过"}
+  C -->|"通过"| D["启动并持续检查会话"]
+  C -->|"待核验或失败"| E["显示原因与恢复操作"]
+  D --> F["完整安全检查与双站出口检查"]
+  F --> B
+```
+
+```mermaid
+flowchart LR
+  A["v1.7.2 运行环境与启动确认"] --> B["v1.7.3 状态一致性"]
+  B --> C["v1.7.4 缓存维护与恢复预算"]
+  C --> D["v1.8.0 规则复核优化与评分时间"]
+```
