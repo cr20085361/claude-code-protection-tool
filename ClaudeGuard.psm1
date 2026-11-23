@@ -611,7 +611,7 @@ function Get-GuardDesktopNetwork([int]$ProcessId) {
     }
     if($main[0].CommandLine -notmatch '--proxy-server=http://127.0.0.1:10818'){throw 'Protected Desktop fixed proxy argument is missing.'}
     $connections=@(Get-NetTCPConnection -ErrorAction SilentlyContinue|Where-Object {$_.OwningProcess -in @($processes.ProcessId) -and $_.State -in 'Established','SynSent'}|Select-Object OwningProcess,@{n='State';e={$_.State.ToString()}},RemoteAddress,RemotePort)
-    $unexpected=@($connections|Where-Object {($_.RemoteAddress -ne '::1' -and $_.RemoteAddress -notlike '127.*') -or (($_.RemoteAddress -eq '::1' -or $_.RemoteAddress -like '127.*') -and $_.RemotePort -in @(10808,10813))})
+    $unexpected=@($connections|Where-Object {($_.RemoteAddress -ne '::1' -and $_.RemoteAddress -notlike '127.*' -and $_.RemoteAddress -notlike '::ffff:127.*') -or $_.RemotePort -in @(10808,10813)})
     $network=@($processes|Where-Object {$_.CommandLine -match 'network.mojom.NetworkService'})
     $fixed=@($connections|Where-Object {$_.OwningProcess -in @($network.ProcessId) -and $_.RemoteAddress -eq '127.0.0.1' -and $_.RemotePort -eq 10818 -and $_.State -eq 'Established'})
     [pscustomobject]@{Time=(Get-Date -Format o);Pid=$ProcessId;Initializing=$false;ExpectedProxyObserved=($fixed.Count -gt 0);UnexpectedConnections=$unexpected;Connections=$connections}

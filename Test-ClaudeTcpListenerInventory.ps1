@@ -23,6 +23,21 @@ try{
             if($found -ne $case.Listening -or $case.SocketAccepts -ne $case.Listening){throw ('Native bind/listen classification failed: '+($case|ConvertTo-Json -Compress))}
         }
     }
+    foreach($address in '127.0.0.1','::1'){
+        $ip=[Net.IPAddress]::Parse($address)
+        $server=[Net.Sockets.TcpListener]::new($ip,0)
+        $client=[Net.Sockets.TcpClient]::new($ip.AddressFamily)
+        $accepted=$null
+        try{
+            $server.Start()
+            $port=$server.LocalEndpoint.Port
+            $client.Connect($ip,$port)
+            $accepted=$server.AcceptTcpClient()
+            $clientPort=$client.Client.LocalEndPoint.Port
+            if(-not [ClaudeGuardNativeListeners]::IsPassive($address,$port,$address,$clientPort) -or
+                [ClaudeGuardNativeListeners]::IsPassive($address,$clientPort,$address,$port)){throw "TCP direction mismatch on $address"}
+        }finally{if($accepted){$accepted.Dispose()};$client.Dispose();$server.Stop()}
+    }
     $result=[pscustomobject]@{Time=(Get-Date).ToString('o');Passed=$true;Samples=5;Cases=$cases;ProductionProcessesTouched=$false}
     $result|ConvertTo-Json -Depth 5|Set-Content (Join-Path $PSScriptRoot 'evidence\tcp-listener-inventory.json') -Encoding utf8
     $result

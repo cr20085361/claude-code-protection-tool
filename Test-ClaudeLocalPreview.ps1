@@ -15,6 +15,7 @@ try{
         function Get-CimInstance{$script:processes}
         function Get-NetTCPConnection{if($script:enumerationFails){throw 'Fixture TCP enumeration failure'};$script:tcp}
         function Get-GuardTcpListeners{if($script:listenerFails){throw 'Fixture listener inventory failure'};$script:inventory}
+        function Test-GuardTcpPassive($row){$row.RemotePort -in @(50000,51111,55078)}
         function Join-Path{param($Path,$ChildPath) $ChildPath}
         function Resolve-GuardReaderPython{'fixture-python'}
         function Get-Process{param($Id) [pscustomobject]@{StartTime=if($script:reusePid -and $Id -eq 200){$script:started.AddSeconds($script:reads)}else{$script:started}}}
@@ -23,18 +24,20 @@ try{
             $script:reads++
             if($script:timeout -and $LocalServicePath){return [pscustomobject]@{ExitCode=124;TimedOut=$true;Output=''}}
             $e=@{Pid=$ProcessId;ApprovedPath=($ProcessId -eq 100);LocalServiceIdentityVerified=$script:identity;
-                ConfigDirMatches=($script:environment -and -not ($script:badWorker -and $ProcessId -eq 201));HttpProxyMatches=$true;HttpsProxyMatches=$true;AllProxyMatches=$true;NoProxyOnlyLoopback=$true;
-                TlsVerificationEnabled=$true;UnexpectedTlsOverrideNames=@();UnexpectedProviderOverrideNames=@()}
+                ConfigDirMatches=($script:environment -and -not ($script:badWorker -and $ProcessId -eq 201) -and -not ($ProcessId -eq 200 -and $name -like 'standalone-*'));HttpProxyMatches=$true;HttpsProxyMatches=$true;AllProxyMatches=$true;NoProxyOnlyLoopback=$true;
+                TlsVerificationEnabled=($name -ne 'standalone-unsafe-tls');UnexpectedTlsOverrideNames=@();UnexpectedProviderOverrideNames=@();
+                StandaloneWebServer=$(if($name -like 'standalone-*'){'vite'}else{''})}
             [pscustomobject]@{ExitCode=0;TimedOut=$false;Output=($e|ConvertTo-Json -Compress)}
         }
-        foreach($name in @('detached-roadmap','unknown-environment','wrong-account-or-image','pid-reused','reader-timeout','wildcard-listener','ipv6-wildcard-listener','unknown-listener','wrong-address-same-port','shared-proxy-10808','shared-proxy-10813','preview-direct-ipv4','preview-direct-ipv6','preview-shared-proxy','preview-child-direct','preview-fixed-proxy','accepted-inbound','listener-state-unknown','owned-service','external-desktop','tcp-enumeration-failure','listener-enumeration-failure','non-listening-bind','gateway-worker','worker-unknown-environment','worker-wildcard-listener','unknown-persistent-recheck','vanished-loopback-recheck')){
+        $pairedCases=@('wildcard-random-port','wildcard-ipv6','dual-stack','wrong-peer-port','wrong-peer-owner','detached-backend','detached-backend-direct','detached-backend-shared','detached-backend-bad-env','wildcard-bad-env','standalone-verified','standalone-unsafe-tls','standalone-unpaired')
+        foreach($name in (@('detached-roadmap','unknown-environment','wrong-account-or-image','pid-reused','reader-timeout','wildcard-listener','ipv6-wildcard-listener','unknown-listener','wrong-address-same-port','shared-proxy-10808','shared-proxy-10813','preview-direct-ipv4','preview-direct-ipv6','preview-shared-proxy','preview-child-direct','preview-fixed-proxy','accepted-inbound','listener-state-unknown','owned-service','external-desktop','tcp-enumeration-failure','listener-enumeration-failure','non-listening-bind','gateway-worker','worker-unknown-environment','worker-wildcard-listener','unknown-persistent-recheck','vanished-loopback-recheck')+$pairedCases)){
             $script:processes=@([pscustomobject]@{ProcessId=100;ParentProcessId=1;ExecutablePath='desktop';CommandLine='--proxy-server=http://127.0.0.1:10818'},
                 [pscustomobject]@{ProcessId=200;ParentProcessId=999;ExecutablePath='python';CommandLine='roadmap serve --port 8765'},
                 [pscustomobject]@{ProcessId=201;ParentProcessId=200;ExecutablePath='child';CommandLine=''})
             $connection=[pscustomobject]@{OwningProcess=100;LocalAddress='127.0.0.1';LocalPort=50000;RemoteAddress='127.0.0.1';RemotePort=8765;State='Established'}
             $listener=[pscustomobject]@{OwningProcess=200;LocalAddress='127.0.0.1';LocalPort=8765;RemoteAddress='0.0.0.0';RemotePort=0;State='Listen'}
             $script:tcp=@($connection,$listener);$script:environment=$true;$script:identity=$true;$script:reusePid=$false;$script:timeout=$false;$script:reads=0;$script:enumerationFails=$false;$script:listenerFails=$false;$script:badWorker=$false
-            $safe=$name -in @('detached-roadmap','preview-fixed-proxy','accepted-inbound','listener-state-unknown','owned-service','non-listening-bind','gateway-worker','vanished-loopback-recheck')
+            $safe=$name -in @('detached-roadmap','preview-fixed-proxy','accepted-inbound','listener-state-unknown','owned-service','non-listening-bind','gateway-worker','vanished-loopback-recheck','worker-wildcard-listener','wildcard-random-port','wildcard-ipv6','dual-stack','detached-backend','standalone-verified')
             switch($name){
                 'unknown-environment' {$script:environment=$false}
                 'wrong-account-or-image' {$script:identity=$false}
@@ -66,6 +69,29 @@ try{
                     'accepted-inbound' {$extra.LocalPort=8765;$extra.RemoteAddress='127.0.0.1';$extra.RemotePort=50000}
                 }
                 $script:tcp+=@($extra)
+            }
+            if($name -in $pairedCases){
+                $connection.RemotePort=Get-Random -Minimum 20000 -Maximum 40000
+                $listener.LocalPort=$connection.RemotePort
+                $listener.LocalAddress=if($name -in 'wildcard-ipv6','dual-stack'){'::'}else{'0.0.0.0'}
+                if($name -eq 'wildcard-ipv6'){$connection.LocalAddress='::1';$connection.RemoteAddress='::1'}
+                $accept=[pscustomobject]@{OwningProcess=200;State='Established';LocalAddress=$connection.RemoteAddress;LocalPort=$connection.RemotePort;RemoteAddress=$connection.LocalAddress;RemotePort=$connection.LocalPort}
+                if($name -eq 'dual-stack'){$accept.LocalAddress='::ffff:127.0.0.1';$accept.RemoteAddress='::ffff:127.0.0.1'}
+                if($name -in 'wrong-peer-port','standalone-unpaired'){$accept.RemotePort++}
+                if($name -eq 'wrong-peer-owner'){$accept.OwningProcess=999}
+                if($name -eq 'wildcard-bad-env'){$script:environment=$false}
+                $script:tcp+=@($accept)
+                if($name -like 'detached-backend*'){
+                    $script:processes[2].ParentProcessId=999
+                    $script:badWorker=$name -eq 'detached-backend-bad-env'
+                    $script:tcp+=@([pscustomobject]@{OwningProcess=201;LocalAddress='0.0.0.0';LocalPort=48001;RemotePort=0;State='Listen'},
+                        [pscustomobject]@{OwningProcess=200;LocalAddress='127.0.0.1';LocalPort=51111;RemoteAddress='127.0.0.1';RemotePort=48001;State='Established'},
+                        [pscustomobject]@{OwningProcess=201;LocalAddress='127.0.0.1';LocalPort=48001;RemoteAddress='127.0.0.1';RemotePort=51111;State='Established'})
+                    if($name -in 'detached-backend-direct','detached-backend-shared'){
+                        $external=$name -eq 'detached-backend-direct'
+                        $script:tcp+=[pscustomobject]@{OwningProcess=201;LocalAddress='127.0.0.1';LocalPort=51112;RemoteAddress=$(if($external){'203.0.113.4'}else{'127.0.0.1'});RemotePort=$(if($external){443}else{10808});State='Established'}
+                    }
+                }
             }
             $script:inventory=@($script:tcp|Where-Object {$_.RemotePort -eq 0})
             if($name -eq 'non-listening-bind'){$script:tcp+=@([pscustomobject]@{OwningProcess=200;LocalAddress='0.0.0.0';LocalPort=55078;RemoteAddress='0.0.0.0';RemotePort=0;State='Bound'})}

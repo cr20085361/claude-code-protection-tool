@@ -5,8 +5,8 @@
     "recorded_at": "2026-10-01T12:03:55+08:00",
     "version_source": null
   },
-  "current_version": "v1.8.0",
-  "completed_iterations": 31,
+  "current_version": "v1.9.0",
+  "completed_iterations": 32,
   "history": [
     {
       "id": "1ed80264-8644-40fd-a830-3d725048fa07",
@@ -1108,6 +1108,21 @@
           "sha256": "6b7f0a269e8c04e7b47179da36a557f7087e97a305938f001db18c6b6900012f"
         }
       ]
+    },
+    {
+      "id": "9da380ad-a719-41bb-b5c0-e4864c7ebc92",
+      "from_version": "v1.8.0",
+      "to_version": "v1.9.0",
+      "level": "minor",
+      "summary": "内置浏览器按 TCP 对端核验动态端口的离线网页、局域网监听与独立本机 API，增加通用开发服务启动入口。",
+      "verification": "46 项本机预览回归通过；Windows IPv4/IPv6 连接方向检查、实际 Vite 5173、随机端口独立 Python HTTP 服务、演示 API、候选窗口与 EXE 健康契约通过。",
+      "recorded_at": "2026-11-23T19:03:09+08:00",
+      "source_fingerprint": {
+        "algorithm": "sha256",
+        "scope": "root-source-and-AGENTS-v1",
+        "sha256": "072bc34c2d763fc22f3c6bf0f8d3f06ba2d7579434871d700bbf39ebb13c489f",
+        "file_count": 85
+      }
     }
   ],
   "merged_local_lineage": {

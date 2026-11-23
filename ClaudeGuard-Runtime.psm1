@@ -77,7 +77,7 @@ function Test-GuardRuntimeEnvironment($Evidence) {
         $Evidence.AllProxyMatches -eq $true -and $Evidence.NoProxyOnlyLoopback -eq $true -and $Evidence.TlsVerificationEnabled -eq $true -and
         @($Evidence.UnexpectedTlsOverrideNames).Count -eq 0 -and @($Evidence.UnexpectedProviderOverrideNames).Count -eq 0
 }
-function Test-GuardLoopbackAddress([string]$Address){$Address -eq '::1' -or $Address -like '127.*'}
+function Test-GuardLoopbackAddress([string]$Address){$Address -eq '::1' -or $Address -like '127.*' -or $Address -like '::ffff:127.*'}
 function Get-GuardTcpListeners {
     # Query the LISTENER table class, not State or an empty remote endpoint:
     # Windows also exposes non-listening bind() sockets with remote port zero.
@@ -92,6 +92,29 @@ public sealed class ClaudeGuardListenerRow {
     public int ReportedState; public string State = "Listen";
 }
 public static class ClaudeGuardNativeListeners {
+    // TcpConnectionEstatsSynOpts / TCP_ESTATS_SYN_OPTS_ROS_v0.ActiveOpen.
+    // Only a successful passive-open observation can excuse a non-loopback incoming peer.
+    [DllImport("iphlpapi.dll")] static extern uint GetPerTcpConnectionEStats(byte[] row, int type, IntPtr rw, int rwVersion, int rwSize, [Out] byte[] ros, int rosVersion, int rosSize, IntPtr rod, int rodVersion, int rodSize);
+    [DllImport("iphlpapi.dll")] static extern uint GetPerTcp6ConnectionEStats(byte[] row, int type, IntPtr rw, int rwVersion, int rwSize, [Out] byte[] ros, int rosVersion, int rosSize, IntPtr rod, int rodVersion, int rodSize);
+    public static bool IsPassive(string local, int localPort, string remote, int remotePort) {
+        IPAddress a, b;
+        if (!IPAddress.TryParse(local,out a) || !IPAddress.TryParse(remote,out b) || a.AddressFamily!=b.AddressFamily) return false;
+        bool v6=a.GetAddressBytes().Length==16;
+        byte[] row=new byte[v6?52:20], ros=new byte[12];
+        row[0]=5; // MIB_TCP_STATE_ESTAB
+        a.GetAddressBytes().CopyTo(row,4);
+        b.GetAddressBytes().CopyTo(row,v6?28:12);
+        if (v6) {
+            BitConverter.GetBytes((uint)a.ScopeId).CopyTo(row,20);
+            BitConverter.GetBytes((uint)b.ScopeId).CopyTo(row,44);
+        }
+        int p=v6?24:8, q=v6?48:16;
+        row[p]=(byte)(localPort>>8); row[p+1]=(byte)localPort;
+        row[q]=(byte)(remotePort>>8); row[q+1]=(byte)remotePort;
+        uint status=v6?GetPerTcp6ConnectionEStats(row,0,IntPtr.Zero,0,0,ros,0,ros.Length,IntPtr.Zero,0,0):
+                       GetPerTcpConnectionEStats(row,0,IntPtr.Zero,0,0,ros,0,ros.Length,IntPtr.Zero,0,0);
+        return status==0 && ros[0]==0;
+    }
     [DllImport("iphlpapi.dll")]
     private static extern uint GetExtendedTcpTable(IntPtr table, ref uint size, bool order, uint family, int tableClass, uint reserved);
     public static ClaudeGuardListenerRow[] Read() {
@@ -132,6 +155,37 @@ public static class ClaudeGuardNativeListeners {
 function Test-GuardLocalServiceConnection($Connection,$Services) {
     @($Services|Where-Object {$_.LocalPort -eq $Connection.RemotePort -and ($_.LocalAddress -eq $Connection.RemoteAddress -or $_.LocalAddress -in @('0.0.0.0','::'))}).Count -gt 0
 }
+function Get-GuardSocketKey($Address,$Port,$PeerAddress,$PeerPort) {
+    $Address=$Address -replace '^::ffff:(?=\d+\.)',''
+    $PeerAddress=$PeerAddress -replace '^::ffff:(?=\d+\.)',''
+    "$Address|$Port|$PeerAddress|$PeerPort"
+}
+function Test-GuardBoundAddress([string]$Bind,[string]$Address) {
+    $Bind -eq $Address -or ($Bind -eq '0.0.0.0' -and $Address -notlike '*:*') -or $Bind -eq '::'
+}
+function Test-GuardTcpPassive($Connection) {
+    [ClaudeGuardNativeListeners]::IsPassive($Connection.LocalAddress,$Connection.LocalPort,$Connection.RemoteAddress,$Connection.RemotePort)
+}
+function Get-GuardPreviewPeer($Connection,$ListenerPorts,$Established) {
+    if($Connection.State -ne 'Established' -or -not (Test-GuardLoopbackAddress $Connection.RemoteAddress) -or
+       $Connection.RemotePort -in @(10808,10813,10818)){return}
+    $key=Get-GuardSocketKey $Connection.RemoteAddress $Connection.RemotePort $Connection.LocalAddress $Connection.LocalPort
+    $peer=$Established[$key]
+    if(-not $peer){return}
+    foreach($listener in $ListenerPorts[[int]$Connection.RemotePort]){
+        if($listener.OwningProcess -eq $peer.OwningProcess -and (Test-GuardBoundAddress $listener.LocalAddress $peer.LocalAddress) -and (Test-GuardTcpPassive $peer)){
+            return $listener
+        }
+    }
+}
+function Test-GuardPreviewInbound($Connection,$ListenerPorts) {
+    if($Connection.State -ne 'Established'){return $false}
+    foreach($listener in $ListenerPorts[[int]$Connection.LocalPort]){
+        if($listener.OwningProcess -ne $Connection.OwningProcess -or -not (Test-GuardBoundAddress $listener.LocalAddress $Connection.LocalAddress)){continue}
+        return (Test-GuardTcpPassive $Connection)
+    }
+    return $false
+}
 function Get-GuardRuntimeSnapshot([ValidateRange(1,30000)][int]$EvidenceBudgetMilliseconds=30000,[ValidateRange(1,10000)][int]$ReaderTimeoutMilliseconds=10000) {
     $d=Get-GuardState
     $processes=@(Get-CimInstance Win32_Process)
@@ -146,14 +200,22 @@ function Get-GuardRuntimeSnapshot([ValidateRange(1,30000)][int]$EvidenceBudgetMi
     $tcp=@(Get-NetTCPConnection -ErrorAction Stop)
     $listeners=@(Get-GuardTcpListeners)
     $connections=@($tcp|Where-Object {$_.OwningProcess -in $pids -and $_.State -in 'Established','SynSent'})
-    $localServices=@($listeners|Where-Object OwningProcess -in $descendants)
+    $listenerPorts=@{};$established=@{};$pairedOwners=@{}
+    foreach($listener in $listeners){$listenerPorts[[int]$listener.LocalPort]=@($listenerPorts[[int]$listener.LocalPort] | Where-Object {$_})+@($listener)}
+    foreach($row in $tcp){
+        if($row.State -eq 'Established' -and (Test-GuardLoopbackAddress $row.LocalAddress)){
+            $key=Get-GuardSocketKey $row.LocalAddress $row.LocalPort $row.RemoteAddress $row.RemotePort
+            $established[$key]=$row
+        }
+    }
+    $localServices=@($listeners|Where-Object {$_.OwningProcess -in $descendants -and (Test-GuardLoopbackAddress $_.LocalAddress)})
     $readerClock=[Diagnostics.Stopwatch]::StartNew()
     $python=$null
     if($mains.Count -or $code.Count -or $connections.Count){
         try{$python=Resolve-GuardReaderPython ([Math]::Min(4000,$EvidenceBudgetMilliseconds))}
         catch{if($_.Exception.Message -notlike 'RuntimeReaderUnavailable:*'){throw};$issues.Add('RuntimeReaderUnavailable')}
     }
-    $previewServices=@();$previewPids=@();$readerTimeoutPids=@();$deadlineExceeded=$false
+    $previewServices=@();$previewPids=@();$standalonePids=@();$readerTimeoutPids=@();$deadlineExceeded=$false
     $previewChecks=[Collections.Generic.List[object]]::new()
     # detached 服务不依赖已经退出的 shell；仅核验 Claude 实际连接的回环端点。
     $candidates=@($listeners|Where-Object {
@@ -166,6 +228,12 @@ function Get-GuardRuntimeSnapshot([ValidateRange(1,30000)][int]$EvidenceBudgetMi
     # Verify root services first, then listeners of their live descendants. The
     # latter are needed for a gateway's internal worker, not an arbitrary port grant.
     $pending=[Collections.Generic.Queue[object]]::new()
+    # A wildcard listener alone proves nothing. Match the accepted socket's
+    # complete reversed tuple and PID before treating it as a preview candidate.
+    foreach($connection in $connections){
+        $peer=Get-GuardPreviewPeer $connection $listenerPorts $established
+        if($peer -and $peer.OwningProcess -notin $pids){$pairedOwners[[int]$peer.OwningProcess]=$true;$pending.Enqueue($peer)}
+    }
     foreach($candidate in $candidates){$pending.Enqueue($candidate)}
     $checkedOwners=@();$previewDescendants=@()
     while($pending.Count){
@@ -177,7 +245,7 @@ function Get-GuardRuntimeSnapshot([ValidateRange(1,30000)][int]$EvidenceBudgetMi
         if(-not $python){$check.Reason='RuntimeReaderUnavailable';continue}
         $owner=@($processes|Where-Object ProcessId -eq $ownerId|Select-Object -First 1)
         if($owner.Count -ne 1 -or -not $owner[0].ExecutablePath){continue}
-        if(@($listeners|Where-Object {$_.OwningProcess -eq $ownerId -and -not (Test-GuardLoopbackAddress $_.LocalAddress)}).Count){$check.Reason='NonLoopbackListener';continue}
+        if(-not $pairedOwners[$ownerId] -and @($listeners|Where-Object {$_.OwningProcess -eq $ownerId -and -not (Test-GuardLoopbackAddress $_.LocalAddress)}).Count){$check.Reason='NonLoopbackListener';continue}
         $remaining=[Math]::Max(0,$EvidenceBudgetMilliseconds-[int]$readerClock.ElapsedMilliseconds)
         if(-not $remaining){$deadlineExceeded=$true;$check.Reason='EvidenceDeadline';continue}
         try{
@@ -188,35 +256,55 @@ function Get-GuardRuntimeSnapshot([ValidateRange(1,30000)][int]$EvidenceBudgetMi
             if($read.ExitCode -ne 0){$check.Reason=if($read.TimedOut){'ReaderTimeout'}else{'IdentityReaderFailed'};continue}
             $e=$read.Output|ConvertFrom-Json
             if($e.Pid -ne $ownerId -or $e.LocalServiceIdentityVerified -ne $true){$check.Reason='IdentityMismatch';continue}
-            if(-not (Test-GuardRuntimeEnvironment $e)){$check.Reason='EnvironmentMismatch';continue}
+            $managed=Test-GuardRuntimeEnvironment $e
+            if(-not $managed){
+                # Ordinary web servers do not need Claude's configuration directory.
+                # Restrict independent origins to a recognized entry point, a verified
+                # TCP pair and clean provider, TLS and proxy settings. Audit all peers.
+                $independent=$pairedOwners[$ownerId] -and $e.PSObject.Properties['StandaloneWebServer'] -and
+                    $e.StandaloneWebServer -in @('vite','python-http','django') -and $e.TlsVerificationEnabled -eq $true -and
+                    @($e.UnexpectedTlsOverrideNames).Count -eq 0 -and @($e.UnexpectedProviderOverrideNames).Count -eq 0
+                if(-not $independent){$check.Reason='EnvironmentMismatch';continue}
+                $standalonePids+=@($ownerId)
+            }
             if((Get-Process -Id $ownerId -ErrorAction Stop).StartTime.ToUniversalTime().ToFileTimeUtc() -ne $started){$check.Reason='ProcessIdentityChanged';continue}
             $previewServices+=@([pscustomobject]@{Pid=$ownerId;Started=$live.StartTime.ToUniversalTime().ToString('o');Path=$owner[0].ExecutablePath;IdentityVerified=$true;Environment=$e})
             $previewPids+=@($ownerId)
-            $check.Accepted=$true;$check.Reason='Verified'
+            $check.Accepted=$true;$check.Reason=if($managed){'Verified'}else{'VerifiedStandaloneWebServer'}
             $previewDescendants=@($previewPids)
             do{$added=@($processes|Where-Object {$_.ParentProcessId -in $previewDescendants -and $_.ProcessId -notin $previewDescendants}|ForEach-Object ProcessId);$previewDescendants+=@($added)}while($added.Count)
+            # A frontend may call an independently started local API. Verify the
+            # receiving owner independently and include its traffic in the same graph.
+            foreach($edge in $tcp.Where({$_.OwningProcess -in $previewDescendants -and $_.State -eq 'Established'})){
+                if(Test-GuardPreviewInbound $edge $listenerPorts){continue}
+                $peer=Get-GuardPreviewPeer $edge $listenerPorts $established
+                if($peer -and $peer.OwningProcess -notin $pids -and $peer.OwningProcess -notin $checkedOwners){
+                    $pairedOwners[[int]$peer.OwningProcess]=$true;$pending.Enqueue($peer)
+                }
+            }
             foreach($childListener in @($listeners|Where-Object {$_.OwningProcess -in $previewDescendants -and $_.OwningProcess -notin $checkedOwners})){$pending.Enqueue($childListener)}
         }catch{$check.Reason='EvidenceException';continue}
     }
     $previewDescendants=@($previewPids)
     do{$added=@($processes|Where-Object {$_.ParentProcessId -in $previewDescendants -and $_.ProcessId -notin $previewDescendants}|ForEach-Object ProcessId);$previewDescendants+=@($added)}while($added.Count)
-    $localServices+=@($listeners|Where-Object OwningProcess -in $previewPids)
+    $localServices+=@($listeners|Where-Object {$_.OwningProcess -in $previewPids -and $_.OwningProcess -notin $standalonePids -and (Test-GuardLoopbackAddress $_.LocalAddress)})
     # 预览服务和存活子进程的出站一并受检；服务端已接受连接按本地监听端点识别。
     $connections+=@($tcp|Where-Object {
         $connection=$_
         $connection.OwningProcess -in $previewDescendants -and $connection.OwningProcess -notin $pids -and $connection.State -in 'Established','SynSent' -and
-        -not @($listeners|Where-Object {$_.OwningProcess -eq $connection.OwningProcess -and $_.LocalPort -eq $connection.LocalPort -and $_.LocalAddress -eq $connection.LocalAddress -and (Test-GuardLoopbackAddress $connection.RemoteAddress)}).Count
+        -not (Test-GuardPreviewInbound $connection $listenerPorts)
     })
     # 未建立的本机连接不代表已通过其它服务联网；监听器启动/退出也可能跨越两次快照。
     # 共享代理始终拒绝，已建立的未知本机连接和外部直连仍触发保护。
     $unconfirmedLoopback=@($connections|Where-Object {
-        ($_.RemoteAddress -eq '::1' -or $_.RemoteAddress -like '127.*') -and
+        (Test-GuardLoopbackAddress $_.RemoteAddress) -and
         $_.State -eq 'SynSent' -and $_.RemotePort -notin @(10808,10813,10818) -and -not (Test-GuardLocalServiceConnection $_ $localServices)
     })
     $unexpected=@($connections|Where-Object {
-        if($_.RemoteAddress -ne '::1' -and $_.RemoteAddress -notlike '127.*'){$true}
+        if(-not (Test-GuardLoopbackAddress $_.RemoteAddress)){$true}
         elseif($_.RemotePort -in @(10808,10813)){$true}
         elseif($_.RemoteAddress -eq '127.0.0.1' -and $_.RemotePort -eq 10818){$false}
+        elseif(($peer=Get-GuardPreviewPeer $_ $listenerPorts $established) -and $peer.OwningProcess -in $previewPids){$false}
         elseif(Test-GuardLocalServiceConnection $_ $localServices){$false}
         else{$_.State -ne 'SynSent'}
     })

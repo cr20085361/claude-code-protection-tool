@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import pathlib
+import struct
 import threading
 from urllib.parse import urlsplit
 
@@ -52,6 +53,38 @@ def read(address, size):
     if not k.ReadProcessMemory(h, address, buf, size, ctypes.byref(count)):
         raise OSError('Process environment evidence unavailable.')
     return buf.raw[:count.value]
+
+
+def standalone_web_server(parameters, executable):
+    """Read the verified process's Windows argv, returning only a server kind."""
+    length, _, pointer = struct.unpack('<HH4xQ', read(parameters + 0x70, 16))
+    if not 0 < length <= 32766 or length % 2:
+        return ''
+    raw = read(pointer, length).decode('utf-16-le')
+    split = ctypes.WinDLL('shell32').CommandLineToArgvW
+    split.argtypes = [w.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+    split.restype = ctypes.POINTER(w.LPWSTR)
+    count = ctypes.c_int()
+    args = split(raw, ctypes.byref(count))
+    if not args:
+        return ''
+    try:
+        argv = list(args[1:count.value])
+    finally:
+        k.LocalFree(ctypes.cast(args, ctypes.c_void_p))
+    image_name = pathlib.Path(executable).name.lower()
+    if image_name == 'node.exe' and argv:
+        entry = pathlib.PureWindowsPath(argv[0]).as_posix().lower()
+        if entry.endswith('/node_modules/vite/bin/vite.js') or entry == 'node_modules/vite/bin/vite.js':
+            return 'vite'
+    if image_name in ('python.exe', 'pythonw.exe'):
+        if argv[:1] == ['-I']:
+            argv = argv[1:]
+        if argv[:2] == ['-m', 'http.server'] and '--cgi' not in argv:
+            return 'python-http'
+        if len(argv) >= 2 and pathlib.PureWindowsPath(argv[0]).name.lower() == 'manage.py' and argv[1] == 'runserver':
+            return 'django'
+    return ''
 
 try:
     image = ctypes.create_unicode_buffer(32768)
@@ -124,9 +157,14 @@ try:
     base_host = (base_url.hostname or '').casefold()
     official_base = (base_url.scheme == 'https' and base_host == 'api.anthropic.com'
                      and base_url.port in (None, 443) and not base_url.username and not base_url.password)
+    standalone_kind = ''
+    if local_service_verified and all(env.get(key, '') in ('', state['ProxyUrl'])
+                                      for key in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY')):
+        standalone_kind = standalone_web_server(params, image.value)
     print(json.dumps({
         'Pid': pid, 'ApprovedPath': approved_path,
         'LocalServiceIdentityVerified': local_service_verified,
+        'StandaloneWebServer': standalone_kind,
         'ConfigDirMatches': env.get('CLAUDE_CONFIG_DIR', '').casefold() == state['ConfigDir'].casefold(),
         'HttpProxyMatches': env.get('HTTP_PROXY') == state['ProxyUrl'],
         'HttpsProxyMatches': env.get('HTTPS_PROXY') == state['ProxyUrl'],
