@@ -1,4 +1,10 @@
 """Read only approved Claude processes; emit comparisons, never credentials."""
+import sys
+
+if (sys.implementation.name != 'cpython' or sys.version_info.major != 3
+        or sys.maxsize != 2**63 - 1):
+    raise SystemExit(125)
+
 import ctypes
 from ctypes import wintypes as w
 import argparse

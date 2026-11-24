@@ -10,11 +10,11 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
-[assembly: System.Reflection.AssemblyVersion("1.9.1.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.9.1.0")]
+[assembly: System.Reflection.AssemblyVersion("1.9.3.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.9.3.0")]
 
 public sealed class ClaudeGuardWindow : Form {
-    public const string BuildVersion="v1.9.1";
+    public const string BuildVersion="v1.9.3";
     static readonly Color CanvasBg=Color.FromArgb(244,246,249);
     static readonly Color CardBg=Color.White;
     static readonly Color CardBorder=Color.FromArgb(226,232,240);
@@ -500,8 +500,8 @@ public sealed class ClaudeGuardWindow : Form {
         if(IsCacheRepairTimeout(operation))detail="本地 Code 缓存修复超时，防护维护未完成。";
         else if(operation!=null && operation.Status=="Failed" && operation.FailureKind=="RuntimeReaderUnavailable")
             detail="维护时未能确认 64 位 Python 3 可运行。请在当前 Windows 账号下检查 Python。";
-        else if(reason.Contains("RuntimeReaderUnavailable"))detail="64 位 Python 3 探测失败，守护无法核验运行环境。请查看守护日志中的探测诊断。";
-        else if(reason.Contains("RuntimeEnvironmentUnreadable"))detail="守护无法核验 Claude 的运行环境。请确认 64 位 Python 3 可用，并用同一 Windows 账号打开入口。";
+        else if(reason.Contains("RuntimeReaderUnavailable"))detail="守护未找到可用的 64 位 Python 3。请检查当前 Windows 账号下的 Python 安装及守护日志。";
+        else if(reason.Contains("RuntimeEnvironmentUnreadable"))detail="守护重试后仍无法取得 Claude 的当次运行环境。请查看守护日志中的读取耗时和错误码。";
         else if(reason.Contains("RuntimeEnvironmentMismatch"))detail="Claude 的运行环境与核准配置不符。";
         else if(reason.Contains("UnexpectedRuntimeNetworkPath") || reason.Contains("Fixed egress mismatch"))detail="守护发现未经核准的网络连接或出口。";
         status.Text=detail+"\n退出 Claude 和本地 Code 后，点击“维护版本”重新核验并恢复防护。";
@@ -535,7 +535,8 @@ public sealed class ClaudeGuardWindow : Form {
         bool identities=health!=null && deployment!=null && deployment.Reliability!=null &&
             ProcessMatches(health.HostPid,health.HostStarted,deployment.Reliability.HostPath) &&
             ProcessMatches(health.SupervisorPid,health.SupervisorStarted,deployment.Reliability.ShellPath);
-        return ValidateHealth(health,deployment,identity,DateTimeOffset.UtcNow,identities,File.Exists(Path.Combine(root,"private","safety-hold.json")));
+        return ValidateHealth(health,deployment,identity,DateTimeOffset.UtcNow,identities,
+            File.Exists(Path.Combine(root,"private","safety-hold.json")),File.Exists(Path.Combine(root,"private","runtime-evidence-pending.json")));
     }
     void RefreshNetworkHealth() {
         try {
@@ -543,10 +544,14 @@ public sealed class ClaudeGuardWindow : Form {
             bool persistedHold=File.Exists(Path.Combine(root,"private","safety-hold.json"));
             if(RenderMaintenance(persistedHold,out operation))return;
             if(persistedHold){ShowSafetyHold(null,operation);return;}
+            if(File.Exists(Path.Combine(root,"private","runtime-evidence-pending.json"))){
+                ShowRuntimeEvidencePending();return;
+            }
             var path=Path.Combine(root,"private","supervisor-health.json");
             if(!File.Exists(path)) { ShowGuardWarning("后台守护状态尚未取得，正在等待自动恢复。");return;}
             var health=new JavaScriptSerializer().Deserialize<HealthResult>(ReadSharedText(path));
             if(health!=null && health.Status=="SafetyHold"){ShowSafetyHold(health.Reason,operation);return;}
+            if(health!=null && health.Status=="RuntimeEvidencePending"){ShowRuntimeEvidencePending();return;}
             var deployment=json.Deserialize<DeploymentResult>(ReadSharedText(Path.Combine(root,"private","deployment.json")));
             var identity=json.Deserialize<HostIdentity>(ReadSharedText(Path.Combine(root,"private","supervisor-host-identity.json")));
             string failure=ValidateCurrentHealth(health,deployment,identity);
@@ -577,6 +582,11 @@ public sealed class ClaudeGuardWindow : Form {
                 default: networkHealth.Text="后台防护检查尚未通过，请重新检查并查看说明。";break;
             }
         } catch {ShowGuardWarning("后台状态暂时无法确认，正在等待自动恢复。");}
+    }
+    void ShowRuntimeEvidencePending() {
+        ShowGuardWarning("运行环境读取超时，守护正在隔离专用连接并自动复查。");
+        heldControls=true;
+        launch.Enabled=login.Enabled=false;
     }
     void ShowGuardWarning(string reason) {
         if(maintenanceControlsHeld){
@@ -633,9 +643,10 @@ public sealed class ClaudeGuardWindow : Form {
         } catch {return false;}finally{CloseHandle(h);}
     }
     public static bool SameTime(string a,string b) {DateTimeOffset x,y;return DateTimeOffset.TryParse(a,out x) && DateTimeOffset.TryParse(b,out y) && x.UtcDateTime.Ticks==y.UtcDateTime.Ticks;}
-    public static string ValidateHealth(HealthResult h,DeploymentResult d,HostIdentity identity,DateTimeOffset now,bool identities,bool held) {
+    public static string ValidateHealth(HealthResult h,DeploymentResult d,HostIdentity identity,DateTimeOffset now,bool identities,bool held,bool runtimeEvidencePending=false) {
         DateTimeOffset stamp,safety,egress,started;
         if(held)return "网络防护已暂停，请退出 Claude 后进行维护。";
+        if(runtimeEvidencePending)return "运行环境读取超时，守护正在隔离专用连接并自动复查。";
         if(h==null || h.SchemaVersion!=2 || !DateTimeOffset.TryParse(h.Time,out stamp))return "后台守护状态尚未取得，正在等待自动恢复。";
         double age=(now-stamp).TotalSeconds;if(age < -5 || age>120)return "后台守护状态已过期，正在等待自动恢复。";
         if(!identities || identity==null || d==null || d.Reliability==null || String.IsNullOrEmpty(h.RunId) ||
@@ -643,6 +654,7 @@ public sealed class ClaudeGuardWindow : Form {
             identity.ShellPath!=d.Reliability.ShellPath || !String.Equals(identity.ScriptPath,Path.GetFullPath(Path.Combine(Path.GetDirectoryName(d.Reliability.HostPath),"..",d.Reliability.SupervisorScript)),StringComparison.OrdinalIgnoreCase))
             return "后台守护已停止或身份未确认，正在等待自动恢复。";
         if(h.Status=="SafetyHold")return "网络防护已暂停，请退出 Claude 后进行维护。";
+        if(h.Status=="RuntimeEvidencePending")return "运行环境证据待复查，守护会自动重试。";
         if(h.Status=="UpstreamUnavailable" || (h.Status=="Checking" && h.ConsecutiveFailures>0)) {
             DateTimeOffset next;
             string retry=DateTimeOffset.TryParse(h.NextProbe,out next) && next>now?"下次重试 "+next.ToLocalTime().ToString("HH:mm:ss")+"。":"后台正在重试。";

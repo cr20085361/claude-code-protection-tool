@@ -24,6 +24,9 @@ function Get-GuardReaderPythonCandidates {
             ForEach-Object {Join-Path $_.FullName 'python.exe'}
     }
 }
+function Test-GuardReaderPythonPath([string]$Path) {
+    $Path -match '^[A-Za-z]:\\' -and [IO.Path]::GetFileName($Path) -ieq 'python.exe' -and $Path -notmatch '\\WindowsApps\\'
+}
 function Invoke-GuardReaderPythonProbe([string]$Path,[int]$TimeoutMilliseconds) {
     $clock=[Diagnostics.Stopwatch]::StartNew()
     $result=[ordered]@{Outcome='StartFailed';ExitCode=$null;NativeErrorCode=$null;ElapsedMilliseconds=0}
@@ -59,7 +62,7 @@ function Resolve-GuardReaderPython([ValidateRange(1,8000)][int]$TimeoutMilliseco
     $paths=@(Get-GuardReaderPythonCandidates | Select-Object -Unique)
     for($index=0;$index -lt $paths.Count -and $clock.ElapsedMilliseconds -lt $TimeoutMilliseconds;$index++){
         $path=$paths[$index]
-        $outcome=if($path -notmatch '^[A-Za-z]:\\' -or [IO.Path]::GetFileName($path) -ine 'python.exe' -or $path -match '\\WindowsApps\\'){'InvalidCandidate'}elseif(-not [IO.File]::Exists($path)){'MissingFile'}
+        $outcome=if(-not (Test-GuardReaderPythonPath $path)){'InvalidCandidate'}elseif(-not [IO.File]::Exists($path)){'MissingFile'}
         if($outcome){
             $failures.Add([pscustomobject]@{CandidateIndex=$index+1;Round=0;Outcome=$outcome;ElapsedMilliseconds=$null;ExitCode=$null;NativeErrorCode=$null})
         }else{$candidates.Add([pscustomobject]@{Index=$index+1;Path=$path})}
@@ -111,13 +114,60 @@ function Invoke-GuardEnvironmentReader([string]$PythonPath,[string]$ReaderPath,[
         if(-not $reader.Start()){throw 'Environment evidence reader could not start.'}
         $output=$reader.StandardOutput.ReadToEndAsync();$errors=$reader.StandardError.ReadToEndAsync()
         $remaining=[Math]::Max(0,$TimeoutMilliseconds-[int]$deadlineClock.ElapsedMilliseconds)
-        if(-not $reader.WaitForExit($remaining)){
+        if(-not $remaining -or -not $reader.WaitForExit($remaining)){
             # 仅结束本次创建的 reader；不终止目标 Claude 或其它证据进程。
             try{$reader.Kill()}catch{}
             return [pscustomobject]@{ExitCode=124;Output='';TimedOut=$true}
         }
+        $remaining=[Math]::Max(0,$TimeoutMilliseconds-[int]$deadlineClock.ElapsedMilliseconds)
+        if(-not $remaining -or -not $output.Wait($remaining)){
+            return [pscustomobject]@{ExitCode=124;Output='';TimedOut=$true}
+        }
         [pscustomobject]@{ExitCode=$reader.ExitCode;Output=$output.GetAwaiter().GetResult();TimedOut=($reader.ExitCode -eq 124)}
     }finally{$reader.Dispose()}
+}
+function Read-GuardRuntimeEvidence($Reader,[int]$ProcessId,[string]$LocalServicePath='',[long]$LocalServiceStarted=0) {
+    if($null -eq $Reader.Candidates){
+        $Reader.Candidates=@(Get-GuardReaderPythonCandidates | Select-Object -Unique |
+            Where-Object {(Test-GuardReaderPythonPath $_) -and [IO.File]::Exists($_)})
+    }
+    if(-not $Reader.Candidates.Count){
+        $Reader.Failures.Add([pscustomobject]@{
+            ProcessId=$ProcessId;CandidateIndex=$null;Round=0;Outcome='NoCandidate'
+            ElapsedMilliseconds=$null;ExitCode=$null;NativeErrorCode=$null
+        })
+        return
+    }
+    # Reuse the interpreter path that worked in this snapshot. Every PID still
+    # requires a fresh response from the isolated reader.
+    $order=@($Reader.PreferredIndex)+@(0..($Reader.Candidates.Count-1)|Where-Object {$_ -ne $Reader.PreferredIndex})
+    foreach($round in 1,2){
+        foreach($index in $order){
+            $remaining=$Reader.BudgetMilliseconds-[int]$Reader.Clock.ElapsedMilliseconds
+            if($remaining -le 0){return}
+            $limit=[Math]::Min($Reader.TimeoutMilliseconds,$remaining)
+            # Give another attempt time to run even when the caller's budget is short.
+            if($round -eq 1){$limit=[Math]::Min($limit,[Math]::Max(1,[int][Math]::Min(5000,[Math]::Floor($remaining/2))))}
+            $attempt=[Diagnostics.Stopwatch]::StartNew()
+            $read=$null;$nativeError=$null;$outcome='ReadFailed'
+            try{
+                $read=Invoke-GuardEnvironmentReader $Reader.Candidates[$index] $Reader.Script $ProcessId $limit $LocalServicePath $LocalServiceStarted
+                if($read.ExitCode -eq 0 -and $Reader.Clock.ElapsedMilliseconds -lt $Reader.BudgetMilliseconds){
+                    $Reader.PreferredIndex=$index
+                    return $read
+                }
+                $outcome=if($read.TimedOut -or $read.ExitCode -eq 0){'TimedOut'}else{'NonZeroExit'}
+            }catch [System.ComponentModel.Win32Exception]{
+                $outcome='StartFailed';$nativeError=$_.Exception.GetBaseException().NativeErrorCode
+            }catch{
+                # Child output and exception details can include local paths.
+            }
+            $Reader.Failures.Add([pscustomobject]@{
+                ProcessId=$ProcessId;CandidateIndex=$index+1;Round=$round;Outcome=$outcome
+                ElapsedMilliseconds=$attempt.ElapsedMilliseconds;ExitCode=if($read){$read.ExitCode};NativeErrorCode=$nativeError
+            })
+        }
+    }
 }
 function Test-GuardRuntimeEnvironment($Evidence) {
     $required=@('ConfigDirMatches','HttpProxyMatches','HttpsProxyMatches','AllProxyMatches','NoProxyOnlyLoopback','TlsVerificationEnabled','UnexpectedTlsOverrideNames','UnexpectedProviderOverrideNames')
@@ -258,14 +308,12 @@ function Get-GuardRuntimeSnapshot([ValidateRange(1,30000)][int]$EvidenceBudgetMi
         }
     }
     $localServices=@($listeners|Where-Object {$_.OwningProcess -in $descendants -and (Test-GuardLoopbackAddress $_.LocalAddress)})
-    $readerClock=[Diagnostics.Stopwatch]::StartNew()
-    $python=$null
-    $pythonProbeFailures=@()
-    if($mains.Count -or $code.Count -or $connections.Count){
-        try{$python=Resolve-GuardReaderPython ([Math]::Min(8000,$EvidenceBudgetMilliseconds)) -ProbeFailures ([ref]$pythonProbeFailures)}
-        catch{if($_.Exception.Message -notlike 'RuntimeReaderUnavailable:*'){throw};$issues.Add('RuntimeReaderUnavailable')}
+    $reader=@{
+        Clock=[Diagnostics.Stopwatch]::StartNew(); BudgetMilliseconds=$EvidenceBudgetMilliseconds
+        TimeoutMilliseconds=$ReaderTimeoutMilliseconds; Script=(Join-Path $PSScriptRoot 'Read-ClaudeProcessEnvironment.py')
+        Candidates=$null; PreferredIndex=0; Failures=[Collections.Generic.List[object]]::new()
     }
-    $previewServices=@();$previewPids=@();$standalonePids=@();$readerTimeoutPids=@();$deadlineExceeded=$false
+    $previewServices=@();$previewPids=@();$standalonePids=@();$deadlineExceeded=$false
     $previewChecks=[Collections.Generic.List[object]]::new()
     # detached 服务不依赖已经退出的 shell；仅核验 Claude 实际连接的回环端点。
     $candidates=@($listeners|Where-Object {
@@ -292,18 +340,20 @@ function Get-GuardRuntimeSnapshot([ValidateRange(1,30000)][int]$EvidenceBudgetMi
         if($ownerId -in $checkedOwners){continue};$checkedOwners+=@($ownerId)
         $check=[pscustomobject]@{Pid=$ownerId;LocalAddress=$candidate.LocalAddress;LocalPort=$candidate.LocalPort;Accepted=$false;Reason='OwnerUnavailable'}
         $previewChecks.Add($check)
-        if(-not $python){$check.Reason='RuntimeReaderUnavailable';continue}
         $owner=@($processes|Where-Object ProcessId -eq $ownerId|Select-Object -First 1)
         if($owner.Count -ne 1 -or -not $owner[0].ExecutablePath){continue}
         if(-not $pairedOwners[$ownerId] -and @($listeners|Where-Object {$_.OwningProcess -eq $ownerId -and -not (Test-GuardLoopbackAddress $_.LocalAddress)}).Count){$check.Reason='NonLoopbackListener';continue}
-        $remaining=[Math]::Max(0,$EvidenceBudgetMilliseconds-[int]$readerClock.ElapsedMilliseconds)
-        if(-not $remaining){$deadlineExceeded=$true;$check.Reason='EvidenceDeadline';continue}
         try{
             $live=Get-Process -Id $ownerId -ErrorAction Stop
             $started=$live.StartTime.ToUniversalTime().ToFileTimeUtc()
-            $read=Invoke-GuardEnvironmentReader $python (Join-Path $PSScriptRoot 'Read-ClaudeProcessEnvironment.py') $ownerId ([Math]::Min($ReaderTimeoutMilliseconds,$remaining)) $owner[0].ExecutablePath $started
-            if($read.TimedOut){$readerTimeoutPids+=@($ownerId)}
-            if($read.ExitCode -ne 0){$check.Reason=if($read.TimedOut){'ReaderTimeout'}else{'IdentityReaderFailed'};continue}
+            $read=Read-GuardRuntimeEvidence $reader $ownerId $owner[0].ExecutablePath $started
+            if(-not $read){
+                if($reader.Clock.ElapsedMilliseconds -ge $EvidenceBudgetMilliseconds){$deadlineExceeded=$true;$check.Reason='EvidenceDeadline'}
+                elseif(-not $reader.Candidates.Count){$check.Reason='RuntimeReaderUnavailable'}
+                elseif(@($reader.Failures|Where-Object {$_.ProcessId -eq $ownerId -and $_.Outcome -eq 'TimedOut'}).Count){$check.Reason='ReaderTimeout'}
+                else{$check.Reason='IdentityReaderFailed'}
+                continue
+            }
             $e=$read.Output|ConvertFrom-Json
             if($e.Pid -ne $ownerId -or $e.LocalServiceIdentityVerified -ne $true){$check.Reason='IdentityMismatch';continue}
             $managed=Test-GuardRuntimeEnvironment $e
@@ -360,27 +410,44 @@ function Get-GuardRuntimeSnapshot([ValidateRange(1,30000)][int]$EvidenceBudgetMi
     })
     if($unexpected.Count){$issues.Add('UnexpectedRuntimeNetworkPath')}
     $environments=@()
+    $timedOutEnvironments=@()
+    $invalidEnvironments=@()
     foreach($p in @($mains)+@($code)) {
-        if(-not $python){continue}
         # 瞬间已退出的子进程不作为失败；仍在运行却不能回读时停止核准。
         if(-not (Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue)){continue}
-        $remaining=[Math]::Max(0,$EvidenceBudgetMilliseconds-[int]$readerClock.ElapsedMilliseconds)
-        if(-not $remaining){$deadlineExceeded=$true;$issues.Add('RuntimeEnvironmentUnreadable');continue}
-        try{$read=Invoke-GuardEnvironmentReader $python (Join-Path $PSScriptRoot 'Read-ClaudeProcessEnvironment.py') $p.ProcessId ([Math]::Min($ReaderTimeoutMilliseconds,$remaining))}
-        catch{if(Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue){$issues.Add('RuntimeEnvironmentUnreadable')};continue}
-        if($read.TimedOut){$readerTimeoutPids+=@($p.ProcessId)}
-        if($readerClock.ElapsedMilliseconds -ge $EvidenceBudgetMilliseconds){$deadlineExceeded=$true}
-        if($read.ExitCode -ne 0){if(Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue){$issues.Add('RuntimeEnvironmentUnreadable')};continue}
+        $read=Read-GuardRuntimeEvidence $reader $p.ProcessId
+        if(-not $read){
+            if($reader.Clock.ElapsedMilliseconds -ge $EvidenceBudgetMilliseconds){$deadlineExceeded=$true}
+            if(Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue){
+                $issue=if($reader.Candidates.Count){'RuntimeEnvironmentUnreadable'}else{'RuntimeReaderUnavailable'}
+                if($issue -notin $issues){$issues.Add($issue)}
+                $attempts=@($reader.Failures|Where-Object ProcessId -eq $p.ProcessId)
+                if($attempts.Count -and -not @($attempts|Where-Object Outcome -ne 'TimedOut').Count){
+                    $timedOutEnvironments+=@($p.ProcessId)
+                }elseif(-not $attempts.Count -and $deadlineExceeded -and
+                    @($reader.Failures|Where-Object Outcome -eq 'TimedOut').Count){
+                    $timedOutEnvironments+=@($p.ProcessId)
+                }else{$invalidEnvironments+=@($p.ProcessId)}
+            }
+            continue
+        }
         try{
             $e=$read.Output|ConvertFrom-Json
             $required=@('Pid','ApprovedPath','ConfigDirMatches','HttpProxyMatches','HttpsProxyMatches','AllProxyMatches','NoProxyOnlyLoopback','TlsVerificationEnabled','UnexpectedTlsOverrideNames','UnexpectedProviderOverrideNames')
             if(-not $e -or @($required|Where-Object {-not $e.PSObject.Properties[$_]}).Count -or $e.Pid -ne $p.ProcessId -or $e.ApprovedPath -ne $true){throw 'Runtime evidence response is invalid.'}
-        }catch{if(Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue){$issues.Add('RuntimeEnvironmentUnreadable')};continue}
+        }catch{
+            if(Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue){
+                if('RuntimeEnvironmentUnreadable' -notin $issues){$issues.Add('RuntimeEnvironmentUnreadable')}
+                $invalidEnvironments+=@($p.ProcessId)
+            }
+            continue
+        }
         $environments+=$e
         if(-not (Test-GuardRuntimeEnvironment $e)){$issues.Add('RuntimeEnvironmentMismatch')}
     }
     $identities=@($pids|ForEach-Object {$running=Get-Process -Id $_ -ErrorAction SilentlyContinue;if($running){@{Pid=$_;Started=$running.StartTime.ToUniversalTime().ToString('o')}}})
-    [pscustomobject]@{Time=[datetime]::UtcNow.ToString('o');Safe=($issues.Count -eq 0);Issues=@($issues);DesktopProcessCount=$desktop.Count;CodeProcessCount=$code.Count;UnexpectedConnections=@($unexpected|Select-Object OwningProcess,LocalAddress,LocalPort,RemoteAddress,RemotePort,State);UnconfirmedLoopbackConnections=@($unconfirmedLoopback|Select-Object OwningProcess,RemoteAddress,RemotePort,State);PreviewServices=$previewServices;PreviewMonitoredPids=$previewDescendants;PreviewServiceChecks=@($previewChecks);ListenerSource='GetExtendedTcpTable/OWNER_PID_LISTENER/IPv4+IPv6';PreviewListeners=@($listeners|Where-Object {$_.OwningProcess -in $checkedOwners}|Select-Object OwningProcess,LocalAddress,LocalPort,ReportedState);Environments=$environments;OwnedPids=@($pids);OwnedProcesses=$identities;EvidenceDeadlineExceeded=$deadlineExceeded;ReaderTimeoutPids=$readerTimeoutPids;EvidenceReaderElapsedMilliseconds=$readerClock.ElapsedMilliseconds;PythonProbeFailures=$pythonProbeFailures}
+    $readerTimeoutPids=@($reader.Failures|Where-Object Outcome -eq 'TimedOut'|Select-Object -ExpandProperty ProcessId -Unique)
+    [pscustomobject]@{Time=[datetime]::UtcNow.ToString('o');Safe=($issues.Count -eq 0);Issues=@($issues);DesktopProcessCount=$desktop.Count;CodeProcessCount=$code.Count;UnexpectedConnections=@($unexpected|Select-Object OwningProcess,LocalAddress,LocalPort,RemoteAddress,RemotePort,State);UnconfirmedLoopbackConnections=@($unconfirmedLoopback|Select-Object OwningProcess,RemoteAddress,RemotePort,State);PreviewServices=$previewServices;PreviewMonitoredPids=$previewDescendants;PreviewServiceChecks=@($previewChecks);ListenerSource='GetExtendedTcpTable/OWNER_PID_LISTENER/IPv4+IPv6';PreviewListeners=@($listeners|Where-Object {$_.OwningProcess -in $checkedOwners}|Select-Object OwningProcess,LocalAddress,LocalPort,ReportedState);Environments=$environments;OwnedPids=@($pids);OwnedProcesses=$identities;EvidenceDeadlineExceeded=$deadlineExceeded;ReaderTimeoutPids=$readerTimeoutPids;EvidenceReaderElapsedMilliseconds=$reader.Clock.ElapsedMilliseconds;RuntimeReaderFailures=$reader.Failures.ToArray();RuntimeEvidenceTimedOut=($timedOutEnvironments.Count -gt 0 -and -not $invalidEnvironments.Count);TimedOutEnvironmentPids=$timedOutEnvironments;InvalidEnvironmentPids=$invalidEnvironments}
 }
 function Get-GuardRuntimeSafety([ValidateRange(1,30000)][int]$EvidenceBudgetMilliseconds=30000,[ValidateRange(1,10000)][int]$ReaderTimeoutMilliseconds=10000) {
     $clock=[Diagnostics.Stopwatch]::StartNew()

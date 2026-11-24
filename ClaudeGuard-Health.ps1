@@ -10,6 +10,9 @@ function Get-GuardHealthAssessment {
     $answer=[ordered]@{Ready=$false;Kind='SupervisorUnavailable';Reason='后台守护尚未确认';Health=$Health;AgeSeconds=$null}
     try {
         if(Test-Path -LiteralPath (Get-GuardPath 'private\safety-hold.json')){$answer.Kind='SafetyHold';throw 'SafetyHold: 网络防护已暂停'}
+        if(Test-Path -LiteralPath (Get-GuardPath 'private\runtime-evidence-pending.json')){
+            $answer.Kind='RuntimeEvidencePending';throw '当次运行证据尚待复查，专用连接暂停恢复。'
+        }
         if(-not $Health -or -not $Health.PSObject.Properties['SchemaVersion'] -or $Health.SchemaVersion -ne 2){throw '旧版或缺失的守护状态'}
         foreach($name in @('Time','RunId','HostPid','HostStarted','SupervisorPid','SupervisorStarted','LastSafetyCheck','LastEgressCheck','Status')){if(-not $Health.PSObject.Properties[$name]){throw ('守护状态缺少字段：'+$name)}}
         $stamp=[datetimeoffset]$Health.Time

@@ -5,8 +5,8 @@
     "recorded_at": "2026-10-01T12:03:55+08:00",
     "version_source": null
   },
-  "current_version": "v1.9.1",
-  "completed_iterations": 33,
+  "current_version": "v1.9.3",
+  "completed_iterations": 35,
   "history": [
     {
       "id": "1ed80264-8644-40fd-a830-3d725048fa07",
@@ -1136,6 +1136,36 @@
         "algorithm": "sha256",
         "scope": "root-source-and-AGENTS-v1",
         "sha256": "95968868cc988a8fe7ae8fb978cface41b95f7c699745d28151e8fc5de742912",
+        "file_count": 86
+      }
+    },
+    {
+      "id": "db7e2328-e610-4c63-aa0b-f2d248088bca",
+      "from_version": "v1.9.1",
+      "to_version": "v1.9.2",
+      "level": "patch",
+      "summary": "修复运行巡检反复预探测 Python 导致的 Claude 误关停，直接读取当次进程环境并在同一预算内重试有效证据。",
+      "verification": "守护决策 44 项、Python 预检 34 项、原生预览 46 项、版本窗口 13 项、生命周期 29 项通过。已安装 EXE 版本、实际窗口和 26 项健康契约通过。维护恢复专用守护及双站核准出口，共享代理进程与配置连续，实际 Desktop 从安全入口启动并通过两轮运行巡检。本地 Code 新会话和长期运行未验收。",
+      "recorded_at": "2026-11-24T14:45:38.8328562+08:00",
+      "source_fingerprint": {
+        "algorithm": "sha256",
+        "scope": "root-source-and-AGENTS-v1",
+        "sha256": "79a98268aa663e13b4affeca05b58811c03ce6df67eeca5294b6e3955618decf",
+        "file_count": 86
+      }
+    },
+    {
+      "id": "de784f0d-429f-4ae7-b05a-4b777c2c6902",
+      "from_version": "v1.9.2",
+      "to_version": "v1.9.3",
+      "level": "patch",
+      "summary": "修复纯取证超时误关停：隔离专用代理，保留现有会话，在取得当次证据后恢复连接。",
+      "verification": "隔离守护决策 51 项、原生预览 46 项、版本窗口 13 项和已安装 EXE 健康契约 29 项通过。实际入口版本和 Claude Desktop 启动及当次巡检通过。新守护和双站出口通过，部署期间专用及共享代理身份连续。新建本地 Code 会话及长时间运行未实测。",
+      "recorded_at": "2026-11-24T15:20:56.7421234+08:00",
+      "source_fingerprint": {
+        "algorithm": "sha256",
+        "scope": "root-source-and-AGENTS-v1",
+        "sha256": "2aa2612867d193cff3afac40f96dbb0f6dd2757934cb2bf2c00e0162201293a1",
         "file_count": 86
       }
     }

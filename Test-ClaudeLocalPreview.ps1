@@ -17,7 +17,8 @@ try{
         function Get-GuardTcpListeners{if($script:listenerFails){throw 'Fixture listener inventory failure'};$script:inventory}
         function Test-GuardTcpPassive($row){$row.RemotePort -in @(50000,51111,55078)}
         function Join-Path{param($Path,$ChildPath) $ChildPath}
-        function Resolve-GuardReaderPython{'fixture-python'}
+        function Get-GuardReaderPythonCandidates{[Diagnostics.Process]::GetCurrentProcess().MainModule.FileName}
+        function Test-GuardReaderPythonPath{$true}
         function Get-Process{param($Id) [pscustomobject]@{StartTime=if($script:reusePid -and $Id -eq 200){$script:started.AddSeconds($script:reads)}else{$script:started}}}
         function Invoke-GuardEnvironmentReader{
             param($PythonPath,$ReaderPath,$ProcessId,$TimeoutMilliseconds,$LocalServicePath,$LocalServiceStarted)

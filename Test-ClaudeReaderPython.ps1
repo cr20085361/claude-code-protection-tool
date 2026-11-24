@@ -7,7 +7,7 @@ $runtimePath=Join-Path $PSScriptRoot 'ClaudeGuard-Runtime.psm1'
 $tokens=$null;$parseErrors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile($runtimePath,[ref]$tokens,[ref]$parseErrors)
 if($parseErrors.Count){throw ('Runtime parse failed: '+($parseErrors.Message -join '; '))}
-$names=@('Get-GuardReaderPythonCandidates','Invoke-GuardReaderPythonProbe','Resolve-GuardReaderPython')
+$names=@('Get-GuardReaderPythonCandidates','Test-GuardReaderPythonPath','Invoke-GuardReaderPythonProbe','Resolve-GuardReaderPython')
 $definitions=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in $names},$false))
 if($definitions.Count -ne $names.Count){throw 'Reader fixture functions were not found exactly once.'}
 $probeSource=($definitions|Where-Object Name -eq 'Invoke-GuardReaderPythonProbe').Extent.Text
