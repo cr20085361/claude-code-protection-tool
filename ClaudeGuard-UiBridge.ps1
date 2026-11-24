@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [ValidateSet('Start','Check','Login','Update','Diagnose','NetworkEnvCheck','NetworkEnvScore','NetworkEnvRuntimeWatch','NetworkEnvSetGate','NetworkEnvAutoFix','NetworkEnvEnablePolicy','NetworkEnvRestorePolicy','NetworkEnvLaunchSafeBrowser','NetworkEnvCliEnable','NetworkEnvCliClear','NetworkEnvCliTerminal')][string]$Action='Start',
     [string]$ResultFile,
@@ -218,11 +218,11 @@ try {
                 $result=Wait-VersionMaintenance $id $p
             }finally{$p.Dispose()}
         }else{
+            if($existing.Count -or @(Get-CimInstance Win32_Process|Where-Object {$_.ExecutablePath -in @($d.CodePaths)}).Count){throw 'Exit Claude and local Code before migration.'}
             $createdOperation=$ActionId
             $null=New-GuardMaintenanceOperation $ActionId
             Set-GuardUiMaintenanceBinding $ActionId $ActionId
             $null=Sync-GuardMaintenanceUiResult $ActionId
-            if($existing.Count){throw 'Exit Claude and local Code before migration.'}
             $stageText=& (Join-Path $PSScriptRoot 'Update-ClaudeGuard.ps1') -OperationId $ActionId
             if(-not $stageText){throw 'Version migration stage was not created.'}
             $stage=$stageText|ConvertFrom-Json

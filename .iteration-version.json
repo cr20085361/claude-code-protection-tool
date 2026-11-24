@@ -5,8 +5,8 @@
     "recorded_at": "2026-10-01T12:03:55+08:00",
     "version_source": null
   },
-  "current_version": "v1.9.3",
-  "completed_iterations": 35,
+  "current_version": "v1.10.0",
+  "completed_iterations": 36,
   "history": [
     {
       "id": "1ed80264-8644-40fd-a830-3d725048fa07",
@@ -1166,6 +1166,21 @@
         "algorithm": "sha256",
         "scope": "root-source-and-AGENTS-v1",
         "sha256": "2aa2612867d193cff3afac40f96dbb0f6dd2757934cb2bf2c00e0162201293a1",
+        "file_count": 86
+      }
+    },
+    {
+      "id": "e134b6dc-7659-4e92-b6e8-39c67ac9f9f5",
+      "from_version": "v1.9.3",
+      "to_version": "v1.10.0",
+      "level": "minor",
+      "summary": "修复守护低优先级饥饿、同账号管理员 Python 发现盲区、断连未保护性退出及历史维护提示误报；新增进程内原生 PEB 环境读取与网络风险联动",
+      "verification": "健康契约 PS/C# 各 26 项、原生状态一致性窗口 149 项、原生维护窗口 11 项、版本窗口 13 项、守护决策与原生 PEB 对拍 49 项、Python 探测 26 项、生命周期 31 项、网络环境风险 13 项、本机预览 46 项、维护夹具 46+10 项、官方更新 94 项、版本台账夹具 27 项及 80 份脚本语法检查全部通过；已同步生产部署并验证 v1.10.0 窗口、Normal 进程优先级与代理连续性。",
+      "recorded_at": "2026-11-24T17:42:15.4694105+08:00",
+      "source_fingerprint": {
+        "algorithm": "sha256",
+        "scope": "root-source-and-AGENTS-v1",
+        "sha256": "f787cf53c83b3948ed299535a4ccf47de78ceaf404e76b931fa1617f9192bd9e",
         "file_count": 86
       }
     }

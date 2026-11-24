@@ -27,6 +27,11 @@ $task=[pscustomobject]@{TaskName='ClaudeProGuard-Supervisor';TaskPath='\';Action
 function New-FixtureTask {$task|ConvertTo-Json -Depth 20|ConvertFrom-Json}
 Assert-GuardSupervisorTask $task $state
 $checks.Add('schema2-exact-task-accepted')
+$normalPriorityTask=New-FixtureTask;$normalPriorityTask.Xml=$normalPriorityTask.Xml.Replace('<Hidden>true</Hidden>','<Hidden>true</Hidden><Priority>4</Priority>')
+Assert-GuardSupervisorTask $normalPriorityTask $state
+$checks.Add('schema2-normal-priority-4-accepted')
+$badPriorityTask=New-FixtureTask;$badPriorityTask.Xml=$badPriorityTask.Xml.Replace('<Hidden>true</Hidden>','<Hidden>true</Hidden><Priority>9</Priority>')
+Require-Rejection 'abnormal-low-priority-rejected' {Assert-GuardSupervisorTask $badPriorityTask $state}
 foreach($case in @('execute','arguments','working-directory','owner','elevated','noninteractive','task-folder','task-name')){
     $changed=New-FixtureTask
     switch($case){execute{$changed.Actions[0].Execute='C:\other.exe'} arguments{$changed.Actions[0].Arguments='--extra'} working-directory{$changed.Actions[0].WorkingDirectory='D:\other'} owner{$changed.Principal.UserId='S-1-5-21-other'} elevated{$changed.Principal.RunLevel='Highest'} noninteractive{$changed.Principal.LogonType='Password'} task-folder{$changed.TaskPath='\Other\'} task-name{$changed.TaskName='Other'}}

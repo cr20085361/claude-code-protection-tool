@@ -17,8 +17,9 @@ using Microsoft.Win32.SafeHandles;
 
 internal static class ClaudeSupervisorHost
 {
-    private const uint CREATE_SUSPENDED = 0x4, CREATE_NO_WINDOW = 0x08000000;
+    private const uint CREATE_SUSPENDED = 0x4, NORMAL_PRIORITY_CLASS = 0x00000020, CREATE_NO_WINDOW = 0x08000000;
     private const uint KILL_ON_JOB_CLOSE = 0x2000, SILENT_BREAKAWAY_OK = 0x1000;
+    private const int ProcessIoPriority = 33, ProcessPagePriority = 39;
     private const int LogLimit = 2097152;
     private static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
     private static readonly object LogLock = new object();
@@ -38,6 +39,7 @@ internal static class ClaudeSupervisorHost
         bool recoveryActive = false, workerAttempt = false;
         try
         {
+            PromoteNormalScheduling(GetCurrentProcess());
             string executable = Path.GetFullPath(Process.GetCurrentProcess().MainModule.FileName);
             string productionRoot = Directory.GetParent(Path.GetDirectoryName(executable)).FullName;
             Root = productionRoot;
@@ -366,8 +368,9 @@ internal static class ClaudeSupervisorHost
             STARTUPINFO startup = new STARTUPINFO(); startup.cb = Marshal.SizeOf(typeof(STARTUPINFO));
             startup.dwFlags = 0x100; startup.hStdInput = input; startup.hStdOutput = stdoutWrite; startup.hStdError = stderrWrite;
             if (!CreateProcess(shell, new StringBuilder(command), IntPtr.Zero, IntPtr.Zero, true,
-                CREATE_SUSPENDED | CREATE_NO_WINDOW, IntPtr.Zero, Root, ref startup, out process)) ThrowNative();
+                CREATE_SUSPENDED | NORMAL_PRIORITY_CLASS | CREATE_NO_WINDOW, IntPtr.Zero, Root, ref startup, out process)) ThrowNative();
             created = true;
+            PromoteNormalScheduling(process.hProcess);
             StartReader(stdoutRead, "stdout"); stdoutRead = IntPtr.Zero;
             StartReader(stderrRead, "stderr"); stderrRead = IntPtr.Zero;
         }
@@ -449,6 +452,17 @@ internal static class ClaudeSupervisorHost
     private static string Hex(byte[] value) { return BitConverter.ToString(value).Replace("-", ""); }
     private static string Quote(string value) { return "\"" + value.Replace("\\\"", "\\\\\"").Replace("\"", "\\\"") + "\""; }
     private static void ThrowNative() { throw new Win32Exception(Marshal.GetLastWin32Error()); }
+    private static void PromoteNormalScheduling(IntPtr handle)
+    {
+        try
+        {
+            SetPriorityClass(handle, NORMAL_PRIORITY_CLASS);
+            int ioNormal = 2, pageNormal = 5;
+            NtSetInformationProcess(handle, ProcessIoPriority, ref ioNormal, sizeof(int));
+            NtSetInformationProcess(handle, ProcessPagePriority, ref pageNormal, sizeof(int));
+        }
+        catch { }
+    }
     private static DateTime CreationTime(IntPtr process)
     {
         long creation, exit, kernel, user;
@@ -464,6 +478,9 @@ internal static class ClaudeSupervisorHost
     [StructLayout(LayoutKind.Sequential)] private struct IO_COUNTERS { public ulong ReadOperationCount, WriteOperationCount, OtherOperationCount, ReadTransferCount, WriteTransferCount, OtherTransferCount; }
     [StructLayout(LayoutKind.Sequential)] private struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
     { public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation; public IO_COUNTERS IoInfo; public UIntPtr ProcessMemoryLimit, JobMemoryLimit, PeakProcessMemoryUsed, PeakJobMemoryUsed; }
+    [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool SetPriorityClass(IntPtr process, uint priorityClass);
+    [DllImport("ntdll.dll")] private static extern int NtSetInformationProcess(IntPtr process, int infoClass, ref int info, int length);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool CreateProcess(string application, StringBuilder command, IntPtr processAttributes, IntPtr threadAttributes, bool inherit, uint flags, IntPtr environment, string directory, ref STARTUPINFO startup, out PROCESS_INFORMATION process);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool CreatePipe(out IntPtr read, out IntPtr write, ref SECURITY_ATTRIBUTES security, uint size);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);

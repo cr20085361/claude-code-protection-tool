@@ -1,4 +1,4 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if ($PSVersionTable.PSVersion -lt [version]'7.4') { throw 'Use PowerShell 7.4 or newer (pwsh) for isolated process environment support.' }
 $script:Root = $PSScriptRoot
@@ -375,6 +375,7 @@ function Sync-GuardProxyProcess([switch]$SupervisorWorker) {
     $identity=Get-GuardProxyProcessIdentity $listeners[0]
     $path=Get-GuardPath 'private\proxy-process.json'
     $tracked=if(Test-Path -LiteralPath $path){Read-GuardJson $path}else{$null}
+    try{$liveProc=Get-Process -Id $identity.Pid -ErrorAction SilentlyContinue;if($liveProc -is [Diagnostics.Process] -and $liveProc.PriorityClass -in @([Diagnostics.ProcessPriorityClass]::BelowNormal,[Diagnostics.ProcessPriorityClass]::Idle)){$liveProc.PriorityClass=[Diagnostics.ProcessPriorityClass]::Normal}}catch{}
     if($tracked -and $tracked.Pid -eq $identity.Pid -and ([datetime]$tracked.Started).ToUniversalTime().Ticks -eq ([datetime]$identity.Started).ToUniversalTime().Ticks){return $false}
     # 只接管已核验的同一路径、同一配置和真实端点；不根据陈旧 PID 结束任何进程。
     Write-GuardJson $path @{Pid=$identity.Pid;Started=$identity.Started;SupervisorOwned=[bool]$SupervisorWorker}
@@ -426,6 +427,7 @@ function Start-GuardProxy([switch]$SupervisorWorker,[datetime]$DeadlineUtc=[date
     $committed=$false
     try {
         $null=$p.Handle
+        try{if($p -is [Diagnostics.Process]){$p.PriorityClass=[Diagnostics.ProcessPriorityClass]::Normal}}catch{}
         $identity=[pscustomobject]@{Pid=$p.Id;Started=$p.StartTime.ToUniversalTime().ToString('o');SupervisorOwned=[bool]$SupervisorWorker}
         for ($i=0;$i -lt 30;$i++) { if($p.HasExited){throw 'Dedicated proxy failed to start.'}; if (@(Get-GuardListener).Count) { break }; Start-Sleep -Milliseconds 100 }
         Assert-GuardCore -ProcessIdentity $identity

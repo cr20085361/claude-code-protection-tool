@@ -10,11 +10,11 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
-[assembly: System.Reflection.AssemblyVersion("1.9.3.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.9.3.0")]
+[assembly: System.Reflection.AssemblyVersion("1.10.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.10.0.0")]
 
 public sealed class ClaudeGuardWindow : Form {
-    public const string BuildVersion="v1.9.3";
+    public const string BuildVersion="v1.10.0";
     static readonly Color CanvasBg=Color.FromArgb(244,246,249);
     static readonly Color CardBg=Color.White;
     static readonly Color CardBorder=Color.FromArgb(226,232,240);
@@ -352,16 +352,48 @@ public sealed class ClaudeGuardWindow : Form {
         Version x,y;
         return Version.TryParse(a,out x) && Version.TryParse(b,out y) && new Version(x.Major,x.Minor,Math.Max(0,x.Build),Math.Max(0,x.Revision)).Equals(new Version(y.Major,y.Minor,Math.Max(0,y.Build),Math.Max(0,y.Revision)));
     }
+    bool IsVerifiedMaintenanceAfter(MaintenanceResult m,DesktopUpdateResult update,DeploymentResult d,DateTimeOffset failedAt,DateTimeOffset now,out DateTimeOffset completedAt) {
+        completedAt=default(DateTimeOffset);
+        if(m==null || m.ActionId==update.MaintenanceId || !DateTimeOffset.TryParse(m.CompletedAt,out completedAt) || completedAt<failedAt || completedAt>now.AddSeconds(5))return false;
+        return ReadVerifiedMaintenanceResult(m,d)!=null;
+    }
     bool HasVerifiedLaterMaintenance(DesktopUpdateResult update) {
         if(protectionViewState!=ProtectionViewState.Ready || !installedMatchesApproved)return false;
         try {
-            var m=ReadMaintenance();DateTimeOffset failedAt,completedAt;
-            if(m==null || m.ActionId==update.MaintenanceId || !File.Exists(Path.Combine(root,"private","maintenance-operation-"+m.ActionId+".json")) || !DateTimeOffset.TryParse(update.CompletedAt,out failedAt) || !DateTimeOffset.TryParse(m.CompletedAt,out completedAt) || completedAt<failedAt || completedAt>DateTimeOffset.UtcNow.AddSeconds(5))return false;
+            DateTimeOffset failedAt,now=DateTimeOffset.UtcNow;
+            if(update==null || !DateTimeOffset.TryParse(update.CompletedAt,out failedAt))return false;
             var d=json.Deserialize<DeploymentResult>(ReadSharedText(Path.Combine(root,"private","deployment.json")));
             var h=json.Deserialize<HealthResult>(ReadSharedText(Path.Combine(root,"private","supervisor-health.json")));
             var identity=json.Deserialize<HostIdentity>(ReadSharedText(Path.Combine(root,"private","supervisor-host-identity.json")));
-            if(ValidateCurrentHealth(h,d,identity)!=null || d.Desktop==null || d.CodeGate==null || String.IsNullOrEmpty(installedCodeVersion) || installedDesktopVersion!=d.Desktop.Version || installedCodeVersion!=d.CodeGate.Version || approvedCodeVersion!=d.CodeGate.Version)return false;
-            return ReadVerifiedMaintenanceResult(m,d)!=null;
+            if(ValidateCurrentHealth(h,d,identity)!=null || d==null || d.Desktop==null || d.CodeGate==null || String.IsNullOrEmpty(installedCodeVersion) || installedDesktopVersion!=d.Desktop.Version || installedCodeVersion!=d.CodeGate.Version || approvedCodeVersion!=d.CodeGate.Version)return false;
+            var active=ReadMaintenance();if(active==null)return false;
+            DateTimeOffset completedAt;
+            if(IsVerifiedMaintenanceAfter(active,update,d,failedAt,now,out completedAt))return true;
+            if(active.Status!="Failed" || active.RecoveryRequired || active.BaselineChanged)return false;
+            DateTimeOffset bestCompleted=default(DateTimeOffset);bool found=false;
+            foreach(string file in Directory.GetFiles(Path.Combine(root,"private"),"maintenance-operation-*.json")) {
+                string name=Path.GetFileNameWithoutExtension(file);
+                if(name==null || !name.StartsWith("maintenance-operation-",StringComparison.OrdinalIgnoreCase))continue;
+                string id=name.Substring("maintenance-operation-".Length);Guid parsed;
+                if(id.Length!=32 || !Guid.TryParseExact(id,"N",out parsed))continue;
+                MaintenanceResult candidate;
+                try{candidate=json.Deserialize<MaintenanceResult>(ReadSharedText(file));}catch{continue;}
+                if(candidate==null || candidate.SchemaVersion!=1 || !String.Equals(candidate.ActionId,id,StringComparison.OrdinalIgnoreCase))continue;
+                DateTimeOffset candidateCompleted;
+                if(IsVerifiedMaintenanceAfter(candidate,update,d,failedAt,now,out candidateCompleted) && (!found || candidateCompleted>bestCompleted)){
+                    bestCompleted=candidateCompleted;found=true;
+                }
+            }
+            if(!found)return false;
+            foreach(string file in Directory.GetFiles(Path.Combine(root,"private"),"maintenance-operation-*.json")) {
+                MaintenanceResult other;
+                try{other=json.Deserialize<MaintenanceResult>(ReadSharedText(file));}catch{continue;}
+                if(other==null || other.ActionId==null)continue;
+                DateTimeOffset otherTime;
+                string stamp=!String.IsNullOrEmpty(other.CompletedAt)?other.CompletedAt:other.StartedAt;
+                if(DateTimeOffset.TryParse(stamp,out otherTime) && otherTime>bestCompleted && (other.BaselineChanged || other.RecoveryRequired || other.Status=="Running" || other.Status=="Interrupted"))return false;
+            }
+            return true;
         } catch {return false;}
     }
     void RefreshDesktopUpdate(){try{var d=ReadDesktopUpdate();RenderDesktopUpdate(d);RenderClientState(IsClaudeOpen(),updateDispatchBusy || IsDesktopInstallationActive(d));}catch{downloadUpdates.Enabled=installUpdates.Enabled=false;downloadStatus.Text="更新记录暂时无法确认，请查看本地说明。";downloadStatus.ForeColor=Color.FromArgb(163,59,42);}}
@@ -501,7 +533,7 @@ public sealed class ClaudeGuardWindow : Form {
         else if(operation!=null && operation.Status=="Failed" && operation.FailureKind=="RuntimeReaderUnavailable")
             detail="维护时未能确认 64 位 Python 3 可运行。请在当前 Windows 账号下检查 Python。";
         else if(reason.Contains("RuntimeReaderUnavailable"))detail="守护未找到可用的 64 位 Python 3。请检查当前 Windows 账号下的 Python 安装及守护日志。";
-        else if(reason.Contains("RuntimeEnvironmentUnreadable"))detail="守护重试后仍无法取得 Claude 的当次运行环境。请查看守护日志中的读取耗时和错误码。";
+        else if(reason.Contains("RuntimeEnvironmentUnreadable"))detail="守护无法核验 Claude 的运行环境。请确认 64 位 Python 3 可用，并用同一 Windows 账号打开入口。";
         else if(reason.Contains("RuntimeEnvironmentMismatch"))detail="Claude 的运行环境与核准配置不符。";
         else if(reason.Contains("UnexpectedRuntimeNetworkPath") || reason.Contains("Fixed egress mismatch"))detail="守护发现未经核准的网络连接或出口。";
         status.Text=detail+"\n退出 Claude 和本地 Code 后，点击“维护版本”重新核验并恢复防护。";
@@ -536,7 +568,7 @@ public sealed class ClaudeGuardWindow : Form {
             ProcessMatches(health.HostPid,health.HostStarted,deployment.Reliability.HostPath) &&
             ProcessMatches(health.SupervisorPid,health.SupervisorStarted,deployment.Reliability.ShellPath);
         return ValidateHealth(health,deployment,identity,DateTimeOffset.UtcNow,identities,
-            File.Exists(Path.Combine(root,"private","safety-hold.json")),File.Exists(Path.Combine(root,"private","runtime-evidence-pending.json")));
+            File.Exists(Path.Combine(root,"private","safety-hold.json")));
     }
     void RefreshNetworkHealth() {
         try {
@@ -544,14 +576,10 @@ public sealed class ClaudeGuardWindow : Form {
             bool persistedHold=File.Exists(Path.Combine(root,"private","safety-hold.json"));
             if(RenderMaintenance(persistedHold,out operation))return;
             if(persistedHold){ShowSafetyHold(null,operation);return;}
-            if(File.Exists(Path.Combine(root,"private","runtime-evidence-pending.json"))){
-                ShowRuntimeEvidencePending();return;
-            }
             var path=Path.Combine(root,"private","supervisor-health.json");
             if(!File.Exists(path)) { ShowGuardWarning("后台守护状态尚未取得，正在等待自动恢复。");return;}
             var health=new JavaScriptSerializer().Deserialize<HealthResult>(ReadSharedText(path));
             if(health!=null && health.Status=="SafetyHold"){ShowSafetyHold(health.Reason,operation);return;}
-            if(health!=null && health.Status=="RuntimeEvidencePending"){ShowRuntimeEvidencePending();return;}
             var deployment=json.Deserialize<DeploymentResult>(ReadSharedText(Path.Combine(root,"private","deployment.json")));
             var identity=json.Deserialize<HostIdentity>(ReadSharedText(Path.Combine(root,"private","supervisor-host-identity.json")));
             string failure=ValidateCurrentHealth(health,deployment,identity);
@@ -582,11 +610,6 @@ public sealed class ClaudeGuardWindow : Form {
                 default: networkHealth.Text="后台防护检查尚未通过，请重新检查并查看说明。";break;
             }
         } catch {ShowGuardWarning("后台状态暂时无法确认，正在等待自动恢复。");}
-    }
-    void ShowRuntimeEvidencePending() {
-        ShowGuardWarning("运行环境读取超时，守护正在隔离专用连接并自动复查。");
-        heldControls=true;
-        launch.Enabled=login.Enabled=false;
     }
     void ShowGuardWarning(string reason) {
         if(maintenanceControlsHeld){
@@ -643,10 +666,9 @@ public sealed class ClaudeGuardWindow : Form {
         } catch {return false;}finally{CloseHandle(h);}
     }
     public static bool SameTime(string a,string b) {DateTimeOffset x,y;return DateTimeOffset.TryParse(a,out x) && DateTimeOffset.TryParse(b,out y) && x.UtcDateTime.Ticks==y.UtcDateTime.Ticks;}
-    public static string ValidateHealth(HealthResult h,DeploymentResult d,HostIdentity identity,DateTimeOffset now,bool identities,bool held,bool runtimeEvidencePending=false) {
+    public static string ValidateHealth(HealthResult h,DeploymentResult d,HostIdentity identity,DateTimeOffset now,bool identities,bool held) {
         DateTimeOffset stamp,safety,egress,started;
         if(held)return "网络防护已暂停，请退出 Claude 后进行维护。";
-        if(runtimeEvidencePending)return "运行环境读取超时，守护正在隔离专用连接并自动复查。";
         if(h==null || h.SchemaVersion!=2 || !DateTimeOffset.TryParse(h.Time,out stamp))return "后台守护状态尚未取得，正在等待自动恢复。";
         double age=(now-stamp).TotalSeconds;if(age < -5 || age>120)return "后台守护状态已过期，正在等待自动恢复。";
         if(!identities || identity==null || d==null || d.Reliability==null || String.IsNullOrEmpty(h.RunId) ||
@@ -654,7 +676,6 @@ public sealed class ClaudeGuardWindow : Form {
             identity.ShellPath!=d.Reliability.ShellPath || !String.Equals(identity.ScriptPath,Path.GetFullPath(Path.Combine(Path.GetDirectoryName(d.Reliability.HostPath),"..",d.Reliability.SupervisorScript)),StringComparison.OrdinalIgnoreCase))
             return "后台守护已停止或身份未确认，正在等待自动恢复。";
         if(h.Status=="SafetyHold")return "网络防护已暂停，请退出 Claude 后进行维护。";
-        if(h.Status=="RuntimeEvidencePending")return "运行环境证据待复查，守护会自动重试。";
         if(h.Status=="UpstreamUnavailable" || (h.Status=="Checking" && h.ConsecutiveFailures>0)) {
             DateTimeOffset next;
             string retry=DateTimeOffset.TryParse(h.NextProbe,out next) && next>now?"下次重试 "+next.ToLocalTime().ToString("HH:mm:ss")+"。":"后台正在重试。";
@@ -821,12 +842,21 @@ public sealed class ClaudeGuardWindow : Form {
         }
         Invalidate();
     }
+    bool ShouldProbeConnectivityInWatch() {
+        if(!IsClaudeOpen())return false;
+        try {
+            var path=Path.Combine(root,"private","supervisor-health.json");
+            if(!File.Exists(path))return true;
+            var h=json.Deserialize<HealthResult>(ReadSharedText(path));DateTimeOffset stamp;
+            return h==null || !DateTimeOffset.TryParse(h.Time,out stamp) || (DateTimeOffset.UtcNow-stamp).TotalSeconds>45;
+        } catch {return true;}
+    }
     async Task PollRuntimeRiskWatchAsync() {
         if(riskWatchBusy || actionBusy || updateDispatchBusy || IsDisposed || PreviewOnly)return;
         if(runtimeModeBox.SelectedIndex==3)return;
         riskWatchBusy=true;
         try {
-            var res=await RunNetworkEnvBridge("NetworkEnvRuntimeWatch","Auto",null,false,-1,null,null);
+            var res=await RunNetworkEnvBridge("NetworkEnvRuntimeWatch","Auto",null,ShouldProbeConnectivityInWatch(),-1,null,null);
             if(!IsDisposed && res!=null && res.RiskScore!=null)ApplyRiskScoreView(res.RiskScore);
         } catch {} finally { riskWatchBusy=false; }
     }
@@ -1091,7 +1121,7 @@ public sealed class ClaudeGuardWindow : Form {
     public class DesktopResult {public string Path {get;set;}public string Version {get;set;}}
     public class CodeResult {public string Version {get;set;}}
     public class ReliabilityResult {public string HostPath {get;set;}public string ShellPath {get;set;}public string SupervisorScript {get;set;}}
-    public class MaintenanceResult {public int SchemaVersion {get;set;}public string ActionId {get;set;}public string StageId {get;set;}public string ResultFile {get;set;}public string Status {get;set;}public string Phase {get;set;}public string StartedAt {get;set;}public string CompletedAt {get;set;}public int CoordinatorPid {get;set;}public string CoordinatorStarted {get;set;}public string CoordinatorPath {get;set;}public int WorkerPid {get;set;}public string WorkerStarted {get;set;}public string WorkerPath {get;set;}public bool RecoveryRequired {get;set;}public bool SupervisorSuspended {get;set;}public string Reason {get;set;}public string FailureKind {get;set;}}
+    public class MaintenanceResult {public int SchemaVersion {get;set;}public string ActionId {get;set;}public string StageId {get;set;}public string ResultFile {get;set;}public string Status {get;set;}public string Phase {get;set;}public string StartedAt {get;set;}public string CompletedAt {get;set;}public int CoordinatorPid {get;set;}public string CoordinatorStarted {get;set;}public string CoordinatorPath {get;set;}public int WorkerPid {get;set;}public string WorkerStarted {get;set;}public string WorkerPath {get;set;}public bool RecoveryRequired {get;set;}public bool SupervisorSuspended {get;set;}public bool BaselineChanged {get;set;}public string Reason {get;set;}public string FailureKind {get;set;}}
     public class MaintenanceView {public bool BlockStart;public bool Observe;public bool Recover;public bool Completed;public bool Failed;public bool Held;public string Message;}
     public class MigrationResult {public bool Success {get;set;}public string ActionId {get;set;}public string StageId {get;set;}public string DesktopVersion {get;set;}public string CodeVersion {get;set;}}
     public class RecoveryResult {public string NextRestart {get;set;}public string Reason {get;set;}}

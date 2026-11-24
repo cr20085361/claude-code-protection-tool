@@ -32,7 +32,7 @@ function Get-FixtureSource([string]$Text,[switch]$Worker) {
     $Text
 }
 $body=Get-FixtureSource $source -Worker
-foreach($scenario in @('egress-drift','runtime-unsafe','runtime-reader-recovered','runtime-reader-unavailable','runtime-timeout-persistent','runtime-timeout-recovers','runtime-timeout-existing-marker','runtime-timeout-inherited-proxy','runtime-timeout-mixed','runtime-timeout-listener-remains','runtime-timeout-proxy-process-remains','tls-disabled','active-code-probe-failure','idle-probe-failure','existing-safety-hold','healthy-current-run','new-version-available','maintenance-before-hash','persisted-restart-budget','failed-start-persisted','persisted-egress-backoff','persisted-egress-success','existing-proxy-during-restart-backoff','stale-health','slow-egress','fatal-recovery-state','slow-cycle-not-resume','resume-keeps-egress-backoff','periodic-check-retains-valid-result')) {
+foreach($scenario in @('egress-drift','runtime-unsafe','runtime-reader-recovered','runtime-reader-unavailable','residual-pending-marker-cleaned','tls-disabled','active-code-first-probe-failure','active-code-probe-failure','active-code-third-probe-failure','idle-probe-failure','interface-unavailable-active-session','existing-safety-hold','healthy-current-run','new-version-available','maintenance-before-hash','persisted-restart-budget','failed-start-persisted','persisted-egress-backoff','persisted-egress-success','existing-proxy-during-restart-backoff','stale-health','slow-egress','fatal-recovery-state','slow-cycle-not-resume','resume-keeps-egress-backoff','periodic-check-retains-valid-result')) {
     $fixture=Get-GuardPath ('private\supervisor-fixture-'+[guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path (Join-Path $fixture 'private') -Force|Out-Null
     $wrapper=Join-Path $fixture 'runner.ps1'
@@ -41,12 +41,11 @@ foreach($scenario in @('egress-drift','runtime-unsafe','runtime-reader-recovered
 param([string]$Fixture,[string]$Scenario,[switch]$SecondRun)
 $RunId='fixture-current-run';$HostPid=42;$HostStarted=[datetime]::UtcNow.ToString('o')
 $script:FixtureTicks=0
-$script:FixtureCycleLimit=if($Scenario -eq 'runtime-timeout-recovers'){4}elseif($Scenario -eq 'runtime-timeout-persistent'){3}elseif($Scenario -in @('runtime-timeout-existing-marker','runtime-timeout-inherited-proxy','stale-health','slow-cycle-not-resume','resume-keeps-egress-backoff','periodic-check-retains-valid-result')){2}else{1}
-$script:StoppedProxy=0;$script:StoppedRuntime=0;$script:StartedProxy=0;$script:EgressCalls=0;$script:PolicyCalls=0;$script:RuntimeCalls=0;$script:HealthSnapshots=@()
-$script:FixtureProxyListening=$Scenario -notin @('runtime-timeout-existing-marker','runtime-timeout-inherited-proxy','persisted-restart-budget','failed-start-persisted')
-$script:FixtureProxyAlive=$script:FixtureProxyListening -or $Scenario -eq 'runtime-timeout-inherited-proxy'
+$script:FixtureCycleLimit=if($Scenario -in @('stale-health','slow-cycle-not-resume','resume-keeps-egress-backoff','periodic-check-retains-valid-result')){2}else{1}
+$script:StoppedProxy=0;$script:StoppedRuntime=0;$script:StoppedSessions=0;$script:StartedProxy=0;$script:EgressCalls=0;$script:PolicyCalls=0;$script:RuntimeCalls=0;$script:HealthSnapshots=@()
+$script:FixtureProxyListening=$Scenario -notin @('persisted-restart-budget','failed-start-persisted','interface-unavailable-active-session')
+$script:FixtureProxyAlive=$script:FixtureProxyListening
 $script:FixtureProxyStarted=[datetime]::UtcNow
-$script:StopsWithPendingMarker=0
 function Get-GuardPath([string]$Name){Join-Path $Fixture $Name}
 function Get-GuardHash([string]$Path){if($Scenario -eq 'maintenance-before-hash'){'changed-hash'}else{'fixture-hash'}}
 function Read-GuardJson([string]$Path){Get-Content $Path -Raw|ConvertFrom-Json}
@@ -54,7 +53,6 @@ function Write-GuardJson([string]$Path,$Value){
     [IO.File]::WriteAllText($Path,($Value|ConvertTo-Json -Depth 30))
     if($Path -eq (Get-GuardPath 'private\supervisor-health.json')){
         $healthSnapshot=$Value|ConvertTo-Json -Depth 30|ConvertFrom-Json
-        $healthSnapshot|Add-Member NoteProperty PendingMarkerPresent (Test-Path -LiteralPath (Get-GuardPath 'private\runtime-evidence-pending.json'))
         $script:HealthSnapshots+=@($healthSnapshot)
     }
 }
@@ -77,12 +75,11 @@ function Get-Process{
         $process
     }
 }
-function Get-CimInstance{if($Scenario -eq 'active-code-probe-failure'){[pscustomobject]@{ExecutablePath='fixture-code'}}}
+function Get-CimInstance{if($Scenario -in @('active-code-first-probe-failure','active-code-probe-failure','active-code-third-probe-failure','egress-drift','tls-disabled','interface-unavailable-active-session')){[pscustomobject]@{ProcessId=777;ExecutablePath='fixture-code'}}}
 function Get-GuardRuntimeSafety{
     $script:RuntimeCalls++
-    $timedOut=$Scenario -in @('runtime-timeout-persistent','runtime-timeout-mixed','runtime-timeout-listener-remains','runtime-timeout-proxy-process-remains') -or ($Scenario -eq 'runtime-timeout-recovers' -and $script:RuntimeCalls -eq 2)
     $readerFailures=@()
-    if($timedOut -or $Scenario -eq 'runtime-reader-recovered'){
+    if($Scenario -eq 'runtime-reader-recovered'){
         $readerFailures+=@([pscustomobject]@{CandidateIndex=1;Round=1;ProcessId=123;Outcome='TimedOut';ElapsedMilliseconds=10000;ExitCode=124;NativeErrorCode=$null})
     }
     if($Scenario -eq 'runtime-reader-unavailable'){
@@ -90,32 +87,28 @@ function Get-GuardRuntimeSafety{
         $readerFailures+=@([pscustomobject]@{CandidateIndex=2;Round=1;ProcessId=123;Outcome='NonZeroExit';ElapsedMilliseconds=80;ExitCode=1;NativeErrorCode=$null})
     }
     [pscustomobject]@{
-        Safe=(-not $timedOut -and $Scenario -notin @('runtime-unsafe','runtime-reader-unavailable'))
+        Safe=($Scenario -notin @('runtime-unsafe','runtime-reader-unavailable'))
         Issues=@(
-            if($timedOut -or $Scenario -eq 'runtime-reader-unavailable'){'RuntimeEnvironmentUnreadable'}
-            if($Scenario -in @('runtime-unsafe','runtime-timeout-mixed')){'UnexpectedRuntimeNetworkPath'}
+            if($Scenario -eq 'runtime-reader-unavailable'){'RuntimeEnvironmentUnreadable'}
+            if($Scenario -eq 'runtime-unsafe'){'UnexpectedRuntimeNetworkPath'}
         )
-        CodeProcessCount=if($timedOut -or $Scenario -in @('active-code-probe-failure','runtime-reader-recovered','runtime-reader-unavailable')){1}else{0}
-        RuntimeEvidenceTimedOut=$timedOut
+        CodeProcessCount=if($Scenario -in @('active-code-first-probe-failure','active-code-probe-failure','active-code-third-probe-failure','runtime-reader-recovered','runtime-reader-unavailable')){1}else{0}
+        RuntimeEvidenceTimedOut=$false
         RuntimeReaderFailures=$readerFailures
     }
 }
+function Stop-GuardProtectedProcesses{param($State);$script:StoppedSessions++;@([pscustomobject]@{Pid=777;Name='claude';Path='fixture-code'})}
 function Stop-GuardUnsafeRuntime{$script:StoppedRuntime++}
 function Stop-GuardProxy{$script:StoppedProxy++;$script:FixtureProxyListening=$false;$script:FixtureProxyAlive=$false}
 function Stop-GuardProxyEmergency{
     $script:StoppedProxy++
-    if(Test-Path -LiteralPath (Get-GuardPath 'private\runtime-evidence-pending.json')){$script:StopsWithPendingMarker++}
-    if($Scenario -ne 'runtime-timeout-listener-remains'){$script:FixtureProxyListening=$false}
-    if($Scenario -ne 'runtime-timeout-proxy-process-remains'){$script:FixtureProxyAlive=$false}
+    $script:FixtureProxyListening=$false
+    $script:FixtureProxyAlive=$false
 }
 function Start-GuardProxy{
     $script:StartedProxy++
-    if($Scenario -notin @('runtime-timeout-recovers','runtime-timeout-existing-marker','runtime-timeout-inherited-proxy')){throw 'Fixture proxy start failed.'}
-    if(Test-Path -LiteralPath (Get-GuardPath 'private\runtime-evidence-pending.json')){throw 'Proxy started before timeout isolation could be safely cleared.'}
-    $script:FixtureProxyListening=$true
-    $script:FixtureProxyAlive=$true
-    $script:FixtureProxyStarted=[datetime]::UtcNow
-    Write-GuardJson (Get-GuardPath 'private\proxy-process.json') @{Pid=123;Started=$script:FixtureProxyStarted.ToString('o')}
+    if($Scenario -eq 'interface-unavailable-active-session'){throw 'Dedicated outbound interface unavailable.'}
+    throw 'Fixture proxy start failed.'
 }
 function Start-Sleep{
     $script:FixtureTicks++
@@ -125,31 +118,31 @@ function Start-Sleep{
     }
     if($Scenario -eq 'resume-keeps-egress-backoff'){$script:lastTick=[datetime]::UtcNow.AddSeconds(-65)}
     if($Scenario -eq 'periodic-check-retains-valid-result'){$script:nextSafetyCheck=[datetime]::MinValue}
-    if($Scenario -eq 'runtime-timeout-recovers' -and $script:FixtureTicks -eq 1){$script:nextSafetyCheck=[datetime]::MinValue}
 }
 function Test-GuardEgress{
     $script:EgressCalls++
     if($Scenario -eq 'egress-drift'){throw 'Fixed egress mismatch; protected traffic must stop.'}
-    if($Scenario -in @('active-code-probe-failure','idle-probe-failure')){throw 'Neutral egress probes failed; desktop startup refused.'}
+    if($Scenario -in @('active-code-first-probe-failure','active-code-probe-failure','active-code-third-probe-failure','idle-probe-failure')){throw 'Neutral egress probes failed; desktop startup refused.'}
     if($Scenario -eq 'slow-egress'){[Threading.Thread]::Sleep(200)}
     if($Scenario -eq 'slow-cycle-not-resume'){$script:lastTick=[datetime]::UtcNow.AddSeconds(-65)}
     [pscustomobject]@{Time=[datetime]::UtcNow.ToString('o');ProbeDegraded=$false;VerifiedProbeCount=2}
 }
 Write-GuardJson (Get-GuardPath 'private\proxy-process.json') @{Pid=123;Started=$script:FixtureProxyStarted.ToString('o')}
-if($Scenario -in @('runtime-timeout-existing-marker','runtime-timeout-inherited-proxy')){Write-GuardJson (Get-GuardPath 'private\runtime-evidence-pending.json') @{Time=[datetime]::UtcNow.ToString('o');RunId='fixture-previous-run'}}
+if($Scenario -eq 'residual-pending-marker-cleaned'){Write-GuardJson (Get-GuardPath 'private\runtime-evidence-pending.json') @{Time=[datetime]::UtcNow.ToString('o');RunId='fixture-previous-run'}}
 if($Scenario -eq 'new-version-available'){Write-GuardJson (Get-GuardPath 'private\version-update-status.json') @{SchemaVersion=1;Status='Checked';CheckedAt=[datetime]::UtcNow.ToString('o');LastSuccess=@{LatestDesktopVersion='99.0.0'}}}
 if($Scenario -eq 'existing-safety-hold'){Write-GuardJson (Get-GuardPath 'private\safety-hold.json') @{Reason='previous-fixed-egress-mismatch'}}
 if($Scenario -eq 'maintenance-before-hash'){Write-GuardJson (Get-GuardPath 'private\maintenance.json') @{Until=[datetime]::UtcNow.AddMinutes(2).ToString('o')}}
-if(-not $SecondRun -and $Scenario -in @('active-code-probe-failure','idle-probe-failure','persisted-restart-budget','persisted-egress-backoff','persisted-egress-success','resume-keeps-egress-backoff')){
+if(-not $SecondRun -and $Scenario -in @('active-code-first-probe-failure','active-code-probe-failure','active-code-third-probe-failure','idle-probe-failure','persisted-restart-budget','persisted-egress-backoff','persisted-egress-success','resume-keeps-egress-backoff')){
     $attempts=if($Scenario -eq 'persisted-restart-budget'){@([datetime]::UtcNow.AddSeconds(-3).ToString('o'),[datetime]::UtcNow.AddSeconds(-2).ToString('o'),[datetime]::UtcNow.AddSeconds(-1).ToString('o'))}else{@()}
     $next=if($Scenario -in @('persisted-egress-backoff','resume-keeps-egress-backoff')){[datetime]::UtcNow.AddSeconds(120)}else{[datetime]::UtcNow.AddSeconds(-1)}
-    Write-GuardJson (Get-GuardPath 'private\proxy-recovery.json') @{SchemaVersion=1;RestartTimes=@($attempts|Where-Object {$_});NextRestart=[datetime]::UtcNow.AddSeconds(-1).ToString('o');ConsecutiveEgressFailures=if($Scenario -eq 'persisted-restart-budget'){0}else{2};NextProbe=$next.ToString('o')}
+    $priorFailures=if($Scenario -in @('persisted-restart-budget','active-code-first-probe-failure')){0}elseif($Scenario -eq 'active-code-probe-failure'){1}else{2}
+    Write-GuardJson (Get-GuardPath 'private\proxy-recovery.json') @{SchemaVersion=1;RestartTimes=@($attempts|Where-Object {$_});NextRestart=[datetime]::UtcNow.AddSeconds(-1).ToString('o');ConsecutiveEgressFailures=$priorFailures;NextProbe=$next.ToString('o')}
 }
 if($Scenario -eq 'fatal-recovery-state'){[IO.File]::WriteAllText((Get-GuardPath 'private\proxy-recovery.json'),'invalid-json')}
 if($Scenario -eq 'existing-proxy-during-restart-backoff'){Write-GuardJson (Get-GuardPath 'private\proxy-recovery.json') @{SchemaVersion=1;RestartTimes=@([datetime]::UtcNow.ToString('o'));NextRestart=[datetime]::UtcNow.AddMinutes(5).ToString('o');ConsecutiveEgressFailures=0;NextProbe=[datetime]::UtcNow.AddSeconds(-1).ToString('o')}}
 '@
         $footer=@'
-}finally{Write-GuardJson (Get-GuardPath 'counts.json') @{StoppedProxy=$script:StoppedProxy;StoppedRuntime=$script:StoppedRuntime;StartedProxy=$script:StartedProxy;StopsWithPendingMarker=$script:StopsWithPendingMarker;EgressCalls=$script:EgressCalls;PolicyCalls=$script:PolicyCalls;RuntimeCalls=$script:RuntimeCalls;HealthSnapshots=$script:HealthSnapshots;NextSafetyUtc=$nextSafetyCheck.ToUniversalTime().ToString('o');SafetyStartTicks=if($safetyStarted){$safetyStarted.Ticks}else{0};NextSafetyTicks=$nextSafetyCheck.Ticks;NextProbeTicks=$nextProbe.Ticks}}
+}finally{Write-GuardJson (Get-GuardPath 'counts.json') @{StoppedProxy=$script:StoppedProxy;StoppedRuntime=$script:StoppedRuntime;StoppedSessions=$script:StoppedSessions;StartedProxy=$script:StartedProxy;EgressCalls=$script:EgressCalls;PolicyCalls=$script:PolicyCalls;RuntimeCalls=$script:RuntimeCalls;HealthSnapshots=$script:HealthSnapshots;NextSafetyUtc=$nextSafetyCheck.ToUniversalTime().ToString('o');SafetyStartTicks=if($safetyStarted){$safetyStarted.Ticks}else{0};NextSafetyTicks=$nextSafetyCheck.Ticks;NextProbeTicks=$nextProbe.Ticks}}
 '@
         [IO.File]::WriteAllText($wrapper,$header+$newLine+'try{'+$newLine+$body+$newLine+$footer)
         $output=& $shell -NoProfile -File $wrapper -Fixture $fixture -Scenario $scenario 2>&1
@@ -162,12 +155,9 @@ if($Scenario -eq 'existing-proxy-during-restart-backoff'){Write-GuardJson (Get-G
         $readerEvents=@($events|Where-Object Kind -eq 'RuntimeEvidenceReadFailed')
         $safetyStops=@($events|Where-Object Kind -eq 'SafetyStop')
         $eventKinds=@($events|ForEach-Object Kind)
-        $restoredIndex=[array]::IndexOf($eventKinds,'RuntimeEvidenceRestored')
-        $proxyStartedIndex=[array]::IndexOf($eventKinds,'ProxyStarted')
-        $lastEgressIndex=[array]::LastIndexOf($eventKinds,'EgressVerified')
         $recovery=if(Test-Path (Join-Path $fixture 'private\proxy-recovery.json')){if($scenario -ne 'fatal-recovery-state'){Read-GuardJson (Join-Path $fixture 'private\proxy-recovery.json')}}
         $passed=switch($scenario){
-            'egress-drift' {$health.Status -eq 'SafetyHold' -and $held -and $counts.StoppedProxy -eq 1}
+            'egress-drift' {$health.Status -eq 'SafetyHold' -and $held -and $counts.StoppedProxy -eq 1 -and $counts.StoppedSessions -eq 1}
             'runtime-unsafe' {$health.Status -eq 'SafetyHold' -and $held -and $counts.StoppedRuntime -eq 1 -and $counts.StoppedProxy -eq 1}
             'runtime-reader-recovered' {
                 $health.Status -eq 'Healthy' -and -not $held -and $counts.StoppedRuntime -eq 0 -and $counts.StoppedProxy -eq 0 -and
@@ -184,36 +174,13 @@ if($Scenario -eq 'existing-proxy-during-restart-backoff'){Write-GuardJson (Get-G
                 @($readerEvents[0].Data.Attempts).Count -eq 2 -and @($readerEvents[0].Data.Attempts|Where-Object Outcome -ne 'NonZeroExit').Count -eq 0 -and
                 ($readerEvents[0].Data.Attempts.CandidateIndex -join ',') -eq '1,2'
             }
-            'runtime-timeout-persistent' {
-                $health.Status -eq 'RuntimeEvidencePending' -and $pending -and -not $held -and
-                $counts.StopsWithPendingMarker -eq 1 -and $counts.StoppedProxy -eq 1 -and $counts.StoppedRuntime -eq 0 -and $counts.StartedProxy -eq 0 -and
-                $counts.RuntimeCalls -eq 3 -and $counts.EgressCalls -eq 0 -and -not $health.LastSafetyCheck -and -not $health.LastEgressCheck -and
-                'RuntimeEvidencePaused' -in $eventKinds -and $restoredIndex -eq -1 -and $safetyStops.Count -eq 0
-            }
-            'runtime-timeout-recovers' {
-                $health.Status -eq 'Healthy' -and -not $pending -and -not $held -and $health.LastSafetyCheck -and $health.LastEgressCheck -and
-                $counts.StopsWithPendingMarker -eq 1 -and $counts.StoppedProxy -eq 1 -and $counts.StoppedRuntime -eq 0 -and $counts.StartedProxy -eq 1 -and
-                $counts.RuntimeCalls -ge 3 -and $counts.EgressCalls -eq 2 -and 'RuntimeEvidencePaused' -in $eventKinds -and
-                $restoredIndex -gt 0 -and $restoredIndex -lt $proxyStartedIndex -and $proxyStartedIndex -lt $lastEgressIndex
-            }
-            {$_ -in @('runtime-timeout-existing-marker','runtime-timeout-inherited-proxy')} {
-                $expectedStops=if($scenario -eq 'runtime-timeout-inherited-proxy'){1}else{0}
-                $health.Status -eq 'Healthy' -and -not $pending -and -not $held -and $health.LastSafetyCheck -and $health.LastEgressCheck -and
-                $counts.StoppedProxy -eq $expectedStops -and $counts.StopsWithPendingMarker -eq $expectedStops -and $counts.StoppedRuntime -eq 0 -and $counts.StartedProxy -eq 1 -and
-                $counts.RuntimeCalls -ge 1 -and $counts.EgressCalls -eq 1 -and
-                $restoredIndex -gt 0 -and $restoredIndex -lt $proxyStartedIndex -and $proxyStartedIndex -lt $lastEgressIndex
-            }
-            'runtime-timeout-mixed' {
-                $health.Status -eq 'SafetyHold' -and $held -and -not $pending -and $counts.StoppedRuntime -eq 1 -and $counts.StoppedProxy -eq 1 -and
-                $counts.EgressCalls -eq 0 -and $safetyStops.Count -eq 1 -and $safetyStops[0].Data.Reason -match 'UnexpectedRuntimeNetworkPath'
-            }
-            {$_ -in @('runtime-timeout-listener-remains','runtime-timeout-proxy-process-remains')} {
-                $health.Status -eq 'SafetyHold' -and $held -and $counts.StoppedRuntime -eq 1 -and $counts.StopsWithPendingMarker -ge 1 -and
-                $counts.StartedProxy -eq 0 -and $counts.EgressCalls -eq 0 -and $safetyStops.Count -eq 1
-            }
-            'tls-disabled' {$health.Status -eq 'SafetyHold' -and $held -and $counts.StoppedProxy -eq 1}
-            'active-code-probe-failure' {$health.Status -eq 'UpstreamUnavailable' -and $counts.StoppedProxy -eq 0 -and -not $held -and $health.ConsecutiveFailures -eq 3}
-            'idle-probe-failure' {$health.Status -eq 'UpstreamUnavailable' -and $counts.StoppedProxy -eq 1 -and -not $held -and $health.ConsecutiveFailures -eq 3}
+            'residual-pending-marker-cleaned' {$health.Status -eq 'Healthy' -and -not $pending -and -not $held -and $counts.StoppedProxy -eq 0}
+            'tls-disabled' {$health.Status -eq 'SafetyHold' -and $held -and $counts.StoppedProxy -eq 1 -and $counts.StoppedSessions -eq 1}
+            'active-code-first-probe-failure' {$health.Status -eq 'UpstreamUnavailable' -and $counts.StoppedSessions -eq 0 -and $counts.StoppedProxy -eq 0 -and -not $held -and $health.ConsecutiveFailures -eq 1 -and (([datetime]$health.NextProbe).ToUniversalTime()-[datetime]::UtcNow).TotalSeconds -le 15}
+            'active-code-probe-failure' {$health.Status -eq 'UpstreamUnavailable' -and $counts.StoppedSessions -eq 1 -and $counts.StoppedProxy -eq 0 -and -not $held -and $health.ConsecutiveFailures -eq 2 -and 'ProtectedSessionStopped' -in $eventKinds}
+            'active-code-third-probe-failure' {$health.Status -eq 'UpstreamUnavailable' -and $counts.StoppedSessions -eq 1 -and $counts.StoppedProxy -eq 1 -and -not $held -and $health.ConsecutiveFailures -eq 3}
+            'idle-probe-failure' {$health.Status -eq 'UpstreamUnavailable' -and $counts.StoppedProxy -eq 1 -and $counts.StoppedSessions -eq 0 -and -not $held -and $health.ConsecutiveFailures -eq 3}
+            'interface-unavailable-active-session' {$health.Status -eq 'InterfaceUnavailable' -and -not $held -and $counts.StoppedSessions -eq 1 -and 'ProtectedSessionStopped' -in $eventKinds}
             'existing-safety-hold' {$health.Status -eq 'SafetyHold' -and $held -and $counts.StoppedProxy -eq 0}
             'healthy-current-run' {$health.Status -eq 'Healthy' -and $counts.PolicyCalls -eq 1 -and $counts.EgressCalls -eq 1 -and $health.LastSafetyCheck -and $health.LastEgressCheck}
             'new-version-available' {$health.Status -eq 'Healthy' -and -not $held -and $counts.StoppedRuntime -eq 0 -and $counts.StoppedProxy -eq 0}
@@ -233,8 +200,7 @@ if($Scenario -eq 'existing-proxy-during-restart-backoff'){Write-GuardJson (Get-G
         $first=@($counts.HealthSnapshots)[0]
         $contract=$health.SchemaVersion -eq 2 -and $health.RunId -eq 'fixture-current-run' -and $health.HostPid -eq 42 -and $health.SupervisorStarted -and $first.Status -eq 'Starting' -and -not $first.LastSafetyCheck -and -not $first.LastEgressCheck
         $preparing=@($counts.HealthSnapshots|Where-Object {$_.Status -in @('Healthy','ProbeDegraded') -and (-not $_.LastSafetyCheck -or -not $_.LastEgressCheck -or ([datetime]$_.LastSafetyCheck).ToUniversalTime() -lt ([datetime]$_.SupervisorStarted).ToUniversalTime() -or ([datetime]$_.LastEgressCheck).ToUniversalTime() -lt ([datetime]$_.SupervisorStarted).ToUniversalTime())}).Count -eq 0
-        $isolated=@($counts.HealthSnapshots|Where-Object {$_.PendingMarkerPresent -and $_.Status -in @('Healthy','ProbeDegraded')}).Count -eq 0
-        if(-not $passed -or -not $contract -or -not $preparing -or -not $isolated){throw ('Supervisor decision regression failed: '+$scenario+' health='+($health|ConvertTo-Json -Compress)+' counts='+($counts|ConvertTo-Json -Compress -Depth 3))}
+        if(-not $passed -or -not $contract -or -not $preparing){throw ('Supervisor decision regression failed: '+$scenario+' health='+($health|ConvertTo-Json -Compress)+' counts='+($counts|ConvertTo-Json -Compress -Depth 3))}
         if($scenario -in @('runtime-reader-recovered','runtime-reader-unavailable')){
             $runtimeEvidence=Read-GuardJson (Join-Path $fixture 'private\runtime-safety.json')
             if(@($runtimeEvidence.RuntimeReaderFailures).Count -ne @($readerEvents[0].Data.Attempts).Count -or
@@ -392,6 +358,33 @@ runpy.run_path(str(pathlib.Path(__file__).with_name('reader.py')), run_name='__m
     $timer=[Diagnostics.Stopwatch]::StartNew();$out=& $python (Join-Path $fixture 'watchdog.py') 2>&1
     if($LASTEXITCODE -ne 124 -or $out -or $timer.ElapsedMilliseconds -ge 2000){throw 'Python reader watchdog fixture failed.'}
     $results+=@{Scenario='python-reader-watchdog';Passed=$true;ExitCode=$LASTEXITCODE;ElapsedMilliseconds=$timer.ElapsedMilliseconds;EmittedEvidence=$false}
+    $parityInfo=[Diagnostics.ProcessStartInfo]::new();$parityInfo.FileName=$python;$parityInfo.UseShellExecute=$false;$parityInfo.CreateNoWindow=$true
+    $parityInfo.ArgumentList.Add('-c');$parityInfo.ArgumentList.Add('import time; time.sleep(15)')
+    $parityInfo.Environment['CLAUDE_CONFIG_DIR']=$fixture
+    $parityInfo.Environment['HTTP_PROXY']='http://127.0.0.1:10818'
+    $parityInfo.Environment['HTTPS_PROXY']='http://127.0.0.1:10818'
+    $parityInfo.Environment['ALL_PROXY']='http://127.0.0.1:10818'
+    $parityInfo.Environment['NO_PROXY']='localhost,127.0.0.1,::1'
+    $parityInfo.Environment['DISABLE_AUTOUPDATER']='1'
+    $parityInfo.Environment['ANTHROPIC_BASE_URL']='https://api.anthropic.com/v1'
+    $parityProc=[Diagnostics.Process]::Start($parityInfo)
+    try{
+        $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        $parityState=[pscustomobject]@{Desktop=[pscustomobject]@{Path=$python};CodePaths=@();UserSid=$sid;ConfigDir=$fixture;ProxyUrl='http://127.0.0.1:10818'}
+        New-Item -ItemType Directory -Path (Join-Path $fixture 'private') -Force|Out-Null
+        [IO.File]::WriteAllText((Join-Path $fixture 'private\deployment.json'),($parityState|ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))
+        $nativeOut=(Invoke-GuardNativeEnvironmentRead -ProcessId $parityProc.Id -State $parityState).Output|ConvertFrom-Json
+        $pyRaw=& $python (Join-Path $fixture 'reader.py') ([string]$parityProc.Id)
+        if($LASTEXITCODE -ne 0){throw 'Python reference reader failed on parity child process.'}
+        $pyOut=($pyRaw -join '')|ConvertFrom-Json
+        foreach($prop in @('Pid','ApprovedPath','LocalServiceIdentityVerified','StandaloneWebServer','ConfigDirMatches','HttpProxyMatches','HttpsProxyMatches','AllProxyMatches','NoProxyOnlyLoopback','BaseUrlHost','BaseUrlIsOfficialAnthropicApi','AutoUpdaterDisabled','TlsVerificationEnabled')){
+            if($nativeOut.$prop -ne $pyOut.$prop){throw ("Native PEB reader mismatch on "+$prop+": native="+$nativeOut.$prop+" py="+$pyOut.$prop)}
+        }
+        if(($nativeOut.ProviderOverrideNames -join ',') -ne ($pyOut.ProviderOverrideNames -join ',') -or ($nativeOut.UnexpectedProviderOverrideNames -join ',') -ne ($pyOut.UnexpectedProviderOverrideNames -join ',') -or ($nativeOut.UnexpectedTlsOverrideNames -join ',') -ne ($pyOut.UnexpectedTlsOverrideNames -join ',')){
+            throw 'Native PEB reader override list mismatch.'
+        }
+        $results+=@{Scenario='native-peb-reader-matches-python-reader';Passed=$true;ApprovedPath=$nativeOut.ApprovedPath;HttpProxyMatches=$nativeOut.HttpProxyMatches}
+    }finally{if(-not $parityProc.HasExited){$parityProc.Kill();$null=$parityProc.WaitForExit(1000)};$parityProc.Dispose();Remove-Item -LiteralPath (Join-Path $fixture 'private\deployment.json'),(Join-Path $fixture 'private') -ErrorAction SilentlyContinue}
 }finally{
     foreach($name in @('runtime-runner.ps1','Read-ClaudeProcessEnvironment.py','reader.py','watchdog.py','attempted','incompatible\python.exe','incompatible')){Remove-Item -LiteralPath (Join-Path $fixture $name) -ErrorAction SilentlyContinue}
     Remove-Item -LiteralPath $fixture -ErrorAction SilentlyContinue

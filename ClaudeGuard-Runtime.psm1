@@ -2,12 +2,26 @@
 $ErrorActionPreference='Stop'
 Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard.psm1')
 function Get-GuardReaderPythonCandidates {
-    # The scheduled supervisor uses the original user's limited token. An
-    # elevated caller must never execute a per-user interpreter discovered here.
+    # Ordinary callers use a limited token. Same-account elevated maintenance
+    # (matching deployment UserSid) also inspects that user's non-reparse installs.
     $roots=@('HKLM:\SOFTWARE\Python\PythonCore')
-    $principal=[Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+    $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal=[Security.Principal.WindowsPrincipal]::new($identity)
     $limited=-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    if($limited){$roots+=@('HKCU:\SOFTWARE\Python\PythonCore')}
+    $includeUser=$limited
+    if(-not $limited -and $identity.User -and $identity.User.Value -match '^S-1-5-21-' -and $PSScriptRoot){
+        $deployFile=Join-Path $PSScriptRoot 'private\deployment.json'
+        if([IO.File]::Exists($deployFile)){
+            try{
+                $deployObj=[IO.File]::ReadAllText($deployFile,[Text.Encoding]::UTF8)|ConvertFrom-Json
+                if($deployObj -and $deployObj.PSObject.Properties['UserSid'] -and [string]$deployObj.UserSid -ceq $identity.User.Value){
+                    $includeUser=$true
+                }
+            }catch{}
+        }
+    }
+    if($includeUser){$roots+=@('HKCU:\SOFTWARE\Python\PythonCore')}
+    $raw=[Collections.Generic.List[string]]::new()
     foreach($root in $roots){
         $versions=Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue |
             Where-Object {$_.PSChildName -match '^3\.\d+(\.\d+)?$'} | Sort-Object {[version]$_.PSChildName} -Descending
@@ -15,13 +29,28 @@ function Get-GuardReaderPythonCandidates {
             $install=Get-Item -LiteralPath (Join-Path $version.PSPath 'InstallPath') -ErrorAction SilentlyContinue
             if(-not $install){continue}
             $exe=$install.GetValue('ExecutablePath')
-            if($exe){$exe}elseif($install.GetValue('')){Join-Path $install.GetValue('') 'python.exe'}
+            if($exe){$raw.Add([string]$exe)}elseif($install.GetValue('')){$raw.Add((Join-Path ([string]$install.GetValue('')) 'python.exe'))}
         }
     }
-    if($limited){
-        $folder=Join-Path $env:LOCALAPPDATA 'Programs\Python'
-        Get-ChildItem -LiteralPath $folder -Directory -Filter 'Python3*' -ErrorAction SilentlyContinue |
-            ForEach-Object {Join-Path $_.FullName 'python.exe'}
+    if($includeUser -and $env:LOCALAPPDATA){
+        foreach($spec in @(
+            @{Folder=(Join-Path $env:LOCALAPPDATA 'Programs\Python');Filter='Python3*'},
+            @{Folder=(Join-Path $env:LOCALAPPDATA 'Python');Filter='pythoncore-3*'}
+        )){
+            Get-ChildItem -LiteralPath $spec.Folder -Directory -Filter $spec.Filter -ErrorAction SilentlyContinue |
+                ForEach-Object {$raw.Add((Join-Path $_.FullName 'python.exe'))}
+        }
+    }
+    foreach($candidate in $raw){
+        if(-not $limited){
+            $cursor=$candidate;$safe=$true
+            while($cursor){
+                if(([IO.File]::Exists($cursor) -or [IO.Directory]::Exists($cursor)) -and (([IO.File]::GetAttributes($cursor) -band [IO.FileAttributes]::ReparsePoint) -ne 0)){$safe=$false;break}
+                $parent=[IO.Directory]::GetParent($cursor);$cursor=if($parent){$parent.FullName}else{$null}
+            }
+            if(-not $safe){continue}
+        }
+        $candidate
     }
 }
 function Test-GuardReaderPythonPath([string]$Path) {
@@ -126,6 +155,356 @@ function Invoke-GuardEnvironmentReader([string]$PythonPath,[string]$ReaderPath,[
         [pscustomobject]@{ExitCode=$reader.ExitCode;Output=$output.GetAwaiter().GetResult();TimedOut=($reader.ExitCode -eq 124)}
     }finally{$reader.Dispose()}
 }
+function Initialize-GuardNativeEnvironmentType {
+    if('ClaudeGuardNativeEnvironment' -as [type]){return}
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
+
+public static class ClaudeGuardNativeEnvironment {
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FILETIME { public uint dwLowDateTime; public uint dwHighDateTime; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PROCESS_BASIC_INFORMATION {
+        public IntPtr ExitStatus;
+        public IntPtr PebBaseAddress;
+        public UIntPtr AffinityMask;
+        public int BasePriority;
+        public UIntPtr UniqueProcessId;
+        public UIntPtr InheritedFromUniqueProcessId;
+    }
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool QueryFullProcessImageNameW(IntPtr process, uint flags, StringBuilder exeName, ref uint size);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool ReadProcessMemory(IntPtr process, IntPtr baseAddress, [Out] byte[] buffer, UIntPtr size, out UIntPtr numberOfBytesRead);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetProcessTimes(IntPtr process, out FILETIME creation, out FILETIME exit, out FILETIME kernel, out FILETIME user);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr LocalFree(IntPtr mem);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFileW(string fileName, uint desiredAccess, uint shareMode, IntPtr securityAttributes, uint creationDisposition, uint flagsAndAttributes, IntPtr templateFile);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandleW(SafeFileHandle file, StringBuilder filePath, uint filePathSize, uint flags);
+    [DllImport("ntdll.dll")]
+    private static extern int NtQueryInformationProcess(IntPtr process, int processInformationClass, ref PROCESS_BASIC_INFORMATION processInformation, int processInformationLength, out int returnLength);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool OpenProcessToken(IntPtr processHandle, uint desiredAccess, out IntPtr tokenHandle);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool GetTokenInformation(IntPtr tokenHandle, int tokenInformationClass, byte[] tokenInformation, uint tokenInformationLength, out uint returnLength);
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool ConvertSidToStringSidW(IntPtr sid, out IntPtr stringSid);
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CommandLineToArgvW(string cmdLine, out int numArgs);
+
+    private static byte[] ReadExact(IntPtr process, ulong address, int size) {
+        byte[] buf = new byte[size];
+        UIntPtr read;
+        if (!ReadProcessMemory(process, new IntPtr(unchecked((long)address)), buf, (UIntPtr)size, out read) || (int)read != size) {
+            throw new IOException("Process environment evidence unavailable.");
+        }
+        return buf;
+    }
+
+    private static string ResolveFinalPath(string path) {
+        string full = Path.GetFullPath(path);
+        using (SafeFileHandle handle = CreateFileW(full, 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero)) {
+            if (!handle.IsInvalid) {
+                StringBuilder sb = new StringBuilder(32768);
+                uint len = GetFinalPathNameByHandleW(handle, sb, (uint)sb.Capacity, 0);
+                if (len > 0 && len < sb.Capacity) {
+                    string resolved = sb.ToString();
+                    if (resolved.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) return @"\\" + resolved.Substring(8);
+                    if (resolved.StartsWith(@"\\?\", StringComparison.OrdinalIgnoreCase)) return resolved.Substring(4);
+                    return resolved;
+                }
+            }
+        }
+        return full;
+    }
+
+    private static string GetProcessUserSid(IntPtr process) {
+        IntPtr token;
+        if (!OpenProcessToken(process, 0x0008, out token)) throw new IOException("Local service owner unavailable.");
+        try {
+            uint needed = 0;
+            GetTokenInformation(token, 1, null, 0, out needed);
+            if (needed == 0) throw new IOException("Local service owner unavailable.");
+            byte[] buf = new byte[needed];
+            if (!GetTokenInformation(token, 1, buf, needed, out needed)) throw new IOException("Local service owner unavailable.");
+            GCHandle pinned = GCHandle.Alloc(buf, GCHandleType.Pinned);
+            try {
+                IntPtr sidPtr = Marshal.ReadIntPtr(pinned.AddrOfPinnedObject());
+                IntPtr strPtr;
+                if (!ConvertSidToStringSidW(sidPtr, out strPtr)) throw new IOException("Local service owner unavailable.");
+                try {
+                    return Marshal.PtrToStringUni(strPtr);
+                } finally {
+                    LocalFree(strPtr);
+                }
+            } finally {
+                pinned.Free();
+            }
+        } finally {
+            CloseHandle(token);
+        }
+    }
+
+    private static string DetectStandaloneWebServer(IntPtr process, ulong parameters, string executable) {
+        byte[] header = ReadExact(process, parameters + 0x70, 16);
+        ushort length = BitConverter.ToUInt16(header, 0);
+        ulong pointer = BitConverter.ToUInt64(header, 8);
+        if (length == 0 || length > 32766 || (length % 2) != 0) return "";
+        string raw = Encoding.Unicode.GetString(ReadExact(process, pointer, length));
+        int count;
+        IntPtr argvPtr = CommandLineToArgvW(raw, out count);
+        if (argvPtr == IntPtr.Zero) return "";
+        List<string> argv = new List<string>();
+        try {
+            for (int i = 1; i < count; i++) {
+                IntPtr itemPtr = Marshal.ReadIntPtr(argvPtr, i * IntPtr.Size);
+                argv.Add(Marshal.PtrToStringUni(itemPtr) ?? "");
+            }
+        } finally {
+            LocalFree(argvPtr);
+        }
+        string imageName = Path.GetFileName(executable).ToLowerInvariant();
+        if (imageName == "node.exe" && argv.Count > 0) {
+            string entry = argv[0].Replace('\\', '/').ToLowerInvariant();
+            if (entry.EndsWith("/node_modules/vite/bin/vite.js", StringComparison.Ordinal) || entry == "node_modules/vite/bin/vite.js") {
+                return "vite";
+            }
+        }
+        if (imageName == "python.exe" || imageName == "pythonw.exe") {
+            int offset = (argv.Count > 0 && argv[0] == "-I") ? 1 : 0;
+            if (argv.Count - offset >= 2 && argv[offset] == "-m" && argv[offset + 1] == "http.server" && !argv.Contains("--cgi")) {
+                return "python-http";
+            }
+            if (argv.Count - offset >= 2 && Path.GetFileName(argv[offset]).ToLowerInvariant() == "manage.py" && argv[offset + 1] == "runserver") {
+                return "django";
+            }
+        }
+        return "";
+    }
+
+    private static string GetEnv(Dictionary<string, string> env, string key) {
+        string val;
+        return env.TryGetValue(key, out val) ? val : "";
+    }
+
+    private static string EscapeJson(string s) {
+        if (s == null) return "";
+        StringBuilder sb = new StringBuilder(s.Length + 4);
+        foreach (char c in s) {
+            switch (c) {
+                case '\\': sb.Append("\\\\"); break;
+                case '"': sb.Append("\\\""); break;
+                case '\b': sb.Append("\\b"); break;
+                case '\f': sb.Append("\\f"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                default:
+                    if (c < 0x20) sb.AppendFormat("\\u{0:x4}", (int)c);
+                    else sb.Append(c);
+                    break;
+            }
+        }
+        return sb.ToString();
+    }
+
+    private static string JsonArray(List<string> items) {
+        if (items.Count == 0) return "[]";
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < items.Count; i++) {
+            if (i > 0) sb.Append(",");
+            sb.Append("\"").Append(EscapeJson(items[i])).Append("\"");
+        }
+        sb.Append("]");
+        return sb.ToString();
+    }
+
+    public static string ReadJson(int pid, string[] approvedPaths, string userSid, string configDir, string proxyUrl, string localServicePath, long localServiceStarted, bool hasLocalService) {
+        if (IntPtr.Size != 8) throw new PlatformNotSupportedException("64-bit process required.");
+        IntPtr h = OpenProcess(0x0410, false, pid);
+        if (h == IntPtr.Zero) throw new IOException("Approved process cannot be opened for read-only evidence.");
+        try {
+            StringBuilder imgBuf = new StringBuilder(32768);
+            uint imgLen = (uint)imgBuf.Capacity;
+            if (!QueryFullProcessImageNameW(h, 0, imgBuf, ref imgLen)) throw new IOException("Process path could not be verified.");
+            string image = imgBuf.ToString();
+            bool approvedPath = false;
+            if (approvedPaths != null) {
+                foreach (string p in approvedPaths) {
+                    if (!string.IsNullOrEmpty(p) && string.Equals(image, p, StringComparison.OrdinalIgnoreCase)) {
+                        approvedPath = true;
+                        break;
+                    }
+                }
+            }
+            bool localServiceVerified = false;
+            if (hasLocalService) {
+                if (!string.Equals(ResolveFinalPath(image), ResolveFinalPath(localServicePath), StringComparison.OrdinalIgnoreCase)) {
+                    throw new InvalidOperationException("Local service image changed.");
+                }
+                FILETIME creation, exit, kernel, user;
+                if (!GetProcessTimes(h, out creation, out exit, out kernel, out user)) {
+                    throw new IOException("Local service creation time unavailable.");
+                }
+                long started = unchecked((long)(((ulong)creation.dwHighDateTime << 32) | creation.dwLowDateTime));
+                if (started != localServiceStarted) {
+                    throw new InvalidOperationException("Local service process identity changed.");
+                }
+                if (!string.Equals(GetProcessUserSid(h), userSid, StringComparison.Ordinal)) {
+                    throw new InvalidOperationException("Local service belongs to another account.");
+                }
+                localServiceVerified = true;
+            } else if (!approvedPath) {
+                throw new InvalidOperationException("Refusing environment read outside approved Claude paths.");
+            }
+
+            PROCESS_BASIC_INFORMATION pbi = new PROCESS_BASIC_INFORMATION();
+            int returned;
+            if (NtQueryInformationProcess(h, 0, ref pbi, Marshal.SizeOf(typeof(PROCESS_BASIC_INFORMATION)), out returned) != 0) {
+                throw new IOException("Process basic information unavailable.");
+            }
+            ulong peb = unchecked((ulong)pbi.PebBaseAddress.ToInt64());
+            ulong parameters = BitConverter.ToUInt64(ReadExact(h, peb + 0x20, 8), 0);
+            ulong envAddress = BitConverter.ToUInt64(ReadExact(h, parameters + 0x80, 8), 0);
+
+            Encoding utf16 = new UnicodeEncoding(false, false, false);
+            byte[] data = new byte[1024 * 1024];
+            int total = 0;
+            string text = null;
+            for (int offset = 0; offset < 1024 * 1024; offset += 256) {
+                byte[] chunk = ReadExact(h, envAddress + (ulong)offset, 256);
+                Buffer.BlockCopy(chunk, 0, data, total, 256);
+                total += 256;
+                string decoded = utf16.GetString(data, 0, total);
+                int term = decoded.IndexOf("\0\0", StringComparison.Ordinal);
+                if (term >= 0) {
+                    text = decoded.Substring(0, term);
+                    break;
+                }
+            }
+            if (text == null) throw new InvalidOperationException("Environment terminator was not found.");
+
+            Dictionary<string, string> env = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (string item in text.Split('\0')) {
+                int eq = item.IndexOf('=');
+                if (eq > 0) {
+                    env[item.Substring(0, eq).ToUpperInvariant()] = item.Substring(eq + 1);
+                }
+            }
+
+            string[] overrides = new string[] { "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY" };
+            string rawBase = GetEnv(env, "ANTHROPIC_BASE_URL");
+            string baseHost = "";
+            bool officialBase = false;
+            Uri parsedBase;
+            if (!string.IsNullOrEmpty(rawBase) && Uri.TryCreate(rawBase, UriKind.Absolute, out parsedBase)) {
+                baseHost = (parsedBase.Host ?? "").ToLowerInvariant();
+                officialBase = string.Equals(parsedBase.Scheme, "https", StringComparison.OrdinalIgnoreCase)
+                    && baseHost == "api.anthropic.com"
+                    && (parsedBase.IsDefaultPort || parsedBase.Port == 443)
+                    && string.IsNullOrEmpty(parsedBase.UserInfo);
+            }
+
+            string standaloneKind = "";
+            if (localServiceVerified) {
+                string hp = GetEnv(env, "HTTP_PROXY"), hsp = GetEnv(env, "HTTPS_PROXY"), ap = GetEnv(env, "ALL_PROXY");
+                if ((hp == "" || hp == proxyUrl) && (hsp == "" || hsp == proxyUrl) && (ap == "" || ap == proxyUrl)) {
+                    standaloneKind = DetectStandaloneWebServer(h, parameters, image);
+                }
+            }
+
+            HashSet<string> noProxySet = new HashSet<string>(GetEnv(env, "NO_PROXY").Split(','), StringComparer.Ordinal);
+            bool noProxyLoopback = noProxySet.Count == 3 && noProxySet.Contains("localhost") && noProxySet.Contains("127.0.0.1") && noProxySet.Contains("::1");
+
+            List<string> providerNames = new List<string>();
+            List<string> unexpectedProviders = new List<string>();
+            foreach (string key in overrides) {
+                if (!string.IsNullOrEmpty(GetEnv(env, key))) {
+                    providerNames.Add(key);
+                    if (!(key == "ANTHROPIC_BASE_URL" && officialBase)) unexpectedProviders.Add(key);
+                }
+            }
+
+            string[] tlsKeys = new string[] { "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE" };
+            List<string> unexpectedTls = new List<string>();
+            foreach (string key in tlsKeys) {
+                if (!string.IsNullOrEmpty(GetEnv(env, key))) unexpectedTls.Add(key);
+            }
+
+            bool configMatches = string.Equals(GetEnv(env, "CLAUDE_CONFIG_DIR"), configDir ?? "", StringComparison.OrdinalIgnoreCase);
+            bool httpMatches = GetEnv(env, "HTTP_PROXY") == proxyUrl;
+            bool httpsMatches = GetEnv(env, "HTTPS_PROXY") == proxyUrl;
+            bool allMatches = GetEnv(env, "ALL_PROXY") == proxyUrl;
+            bool autoUpdaterDisabled = GetEnv(env, "DISABLE_AUTOUPDATER") == "1";
+            bool tlsEnabled = GetEnv(env, "NODE_TLS_REJECT_UNAUTHORIZED") != "0";
+
+            StringBuilder json = new StringBuilder(512);
+            json.Append("{\"Pid\":").Append(pid);
+            json.Append(",\"ApprovedPath\":").Append(approvedPath ? "true" : "false");
+            json.Append(",\"LocalServiceIdentityVerified\":").Append(localServiceVerified ? "true" : "false");
+            json.Append(",\"StandaloneWebServer\":\"").Append(EscapeJson(standaloneKind)).Append("\"");
+            json.Append(",\"ConfigDirMatches\":").Append(configMatches ? "true" : "false");
+            json.Append(",\"HttpProxyMatches\":").Append(httpMatches ? "true" : "false");
+            json.Append(",\"HttpsProxyMatches\":").Append(httpsMatches ? "true" : "false");
+            json.Append(",\"AllProxyMatches\":").Append(allMatches ? "true" : "false");
+            json.Append(",\"NoProxyOnlyLoopback\":").Append(noProxyLoopback ? "true" : "false");
+            json.Append(",\"ProviderOverrideNames\":").Append(JsonArray(providerNames));
+            json.Append(",\"BaseUrlHost\":\"").Append(EscapeJson(baseHost)).Append("\"");
+            json.Append(",\"BaseUrlIsOfficialAnthropicApi\":").Append(officialBase ? "true" : "false");
+            json.Append(",\"UnexpectedProviderOverrideNames\":").Append(JsonArray(unexpectedProviders));
+            json.Append(",\"AutoUpdaterDisabled\":").Append(autoUpdaterDisabled ? "true" : "false");
+            json.Append(",\"TlsVerificationEnabled\":").Append(tlsEnabled ? "true" : "false");
+            json.Append(",\"UnexpectedTlsOverrideNames\":").Append(JsonArray(unexpectedTls));
+            json.Append("}");
+            return json.ToString();
+        } finally {
+            CloseHandle(h);
+        }
+    }
+}
+'@
+}
+function Invoke-GuardNativeEnvironmentRead([int]$ProcessId,$State=$null,[string]$LocalServicePath='',[long]$LocalServiceStarted=0) {
+    if(-not $State){$State=Get-GuardState}
+    Initialize-GuardNativeEnvironmentType
+    $approved=@([string]$State.Desktop.Path)+@($State.CodePaths|ForEach-Object {[string]$_})
+    $hasLocal=-not [string]::IsNullOrEmpty($LocalServicePath)
+    $json=[ClaudeGuardNativeEnvironment]::ReadJson($ProcessId,[string[]]$approved,[string]$State.UserSid,[string]$State.ConfigDir,[string]$State.ProxyUrl,$LocalServicePath,$LocalServiceStarted,$hasLocal)
+    [pscustomobject]@{ExitCode=0;Output=$json;TimedOut=$false}
+}
+function Test-GuardNativeReaderEligible($Reader) {
+    if($Reader.ContainsKey('NativeEligible')){return [bool]$Reader.NativeEligible}
+    $eligible=$false
+    try{
+        $readerCmd=Get-Command Invoke-GuardEnvironmentReader -ErrorAction SilentlyContinue
+        if([Environment]::Is64BitProcess -and $PSCommandPath -and $readerCmd -and $readerCmd.ScriptBlock -and
+            [string]::Equals($readerCmd.ScriptBlock.File,$PSCommandPath,[StringComparison]::OrdinalIgnoreCase) -and
+            $Reader.Script -and [IO.File]::Exists($Reader.Script)){
+            $state=Get-GuardState
+            if($state -and $state.PSObject.Properties['UserSid'] -and $state.PSObject.Properties['ConfigDir'] -and
+                $state.PSObject.Properties['ProxyUrl'] -and $state.PSObject.Properties['Reliability'] -and
+                $state.Reliability -and $state.Reliability.PSObject.Properties['EnvironmentReaderHash'] -and
+                (Get-GuardHash $Reader.Script) -eq $state.Reliability.EnvironmentReaderHash){
+                $Reader['NativeState']=$state
+                $eligible=$true
+            }
+        }
+    }catch{}
+    $Reader['NativeEligible']=$eligible
+    $eligible
+}
 function Read-GuardRuntimeEvidence($Reader,[int]$ProcessId,[string]$LocalServicePath='',[long]$LocalServiceStarted=0) {
     if($null -eq $Reader.Candidates){
         $Reader.Candidates=@(Get-GuardReaderPythonCandidates | Select-Object -Unique |
@@ -137,6 +516,16 @@ function Read-GuardRuntimeEvidence($Reader,[int]$ProcessId,[string]$LocalService
             ElapsedMilliseconds=$null;ExitCode=$null;NativeErrorCode=$null
         })
         return
+    }
+    # Fast in-process read avoids repeated cold-start Python process starvation under heavy CPU/IO load,
+    # while falling back to the isolated Python reader if the target is inaccessible or in test fixtures.
+    if(($Reader.BudgetMilliseconds-[int]$Reader.Clock.ElapsedMilliseconds) -gt 0 -and (Test-GuardNativeReaderEligible $Reader)){
+        try{
+            $fast=Invoke-GuardNativeEnvironmentRead -ProcessId $ProcessId -State $Reader['NativeState'] -LocalServicePath $LocalServicePath -LocalServiceStarted $LocalServiceStarted
+            if($fast.ExitCode -eq 0 -and $Reader.Clock.ElapsedMilliseconds -lt $Reader.BudgetMilliseconds){
+                return $fast
+            }
+        }catch{}
     }
     # Reuse the interpreter path that worked in this snapshot. Every PID still
     # requires a fresh response from the isolated reader.
@@ -486,5 +875,19 @@ function Stop-GuardUnsafeRuntime($Snapshot) {
         $running=Get-Process -Id $ownedPid -ErrorAction SilentlyContinue
         if($p -and $running -and $running.StartTime.ToUniversalTime().Ticks -eq ([datetime]$identity.Started).ToUniversalTime().Ticks -and ($p.ExecutablePath -eq $d.Desktop.Path -or $p.ExecutablePath -in @($d.CodePaths))){Stop-Process -Id $ownedPid -ErrorAction SilentlyContinue}
     }
+}
+function Stop-GuardProtectedProcesses($State=$null) {
+    if(-not $State){$State=Get-GuardState}
+    $targets=@($State.Desktop.Path)+@($State.CodePaths)
+    $stopped=[Collections.Generic.List[int]]::new()
+    foreach($proc in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue|Where-Object {$_.ExecutablePath -in $targets})) {
+        $live=Get-Process -Id $proc.ProcessId -ErrorAction SilentlyContinue
+        if(-not $live){continue}
+        try{
+            Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+            $stopped.Add([int]$proc.ProcessId)
+        }catch{}
+    }
+    @($stopped)
 }
 Export-ModuleMember -Function *-Guard*

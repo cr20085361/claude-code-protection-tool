@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([string]$LauncherAssembly)
 $ErrorActionPreference='Stop'
 Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard.psm1') -Force
@@ -9,10 +9,10 @@ $state=[pscustomobject]@{ExpectedIp='203.0.113.1';Reliability=[pscustomobject]@{
 $base=@{SchemaVersion=2;Time=$now.ToString('o');RunId='fixture-run';HostPid=10;HostStarted=$now.AddSeconds(-60).ToString('o');SupervisorPid=20;SupervisorStarted=$now.AddSeconds(-60).ToString('o');LastSafetyCheck=$now.AddSeconds(-1).ToString('o');LastEgressCheck=$now.AddSeconds(-1).ToString('o');Status='Healthy';LastVerifiedEgress=@{VerifiedProbeCount=2;CloudflareIp='203.0.113.1';IpifyIp='203.0.113.1'}}
 $identity=@{RunId=$base.RunId;HostPid=$base.HostPid;HostStarted=$base.HostStarted;SupervisorPid=$base.SupervisorPid;SupervisorStarted=$base.SupervisorStarted;ShellPath=$state.Reliability.ShellPath;ScriptPath='C:\fixture\ClaudeGuard-Supervisor-v2.ps1'}
 $cases=@()
-function Add-Case($name,$expected,$change,[bool]$identityOk=$true,[string]$task='Running',[bool]$hold=$false,[string]$expectedKind='',[bool]$runtimePending=$false){
+function Add-Case($name,$expected,$change,[bool]$identityOk=$true,[string]$task='Running',[bool]$hold=$false,[string]$expectedKind=''){
     $h=$base|ConvertTo-Json -Depth 5|ConvertFrom-Json
     if($change){& $change $h}
-    $script:cases+=@([pscustomobject]@{Name=$name;Expected=$expected;ExpectedKind=$expectedKind;Health=$h;State=$state;Identity=$identity;IdentityOk=$identityOk;TaskState=$task;Hold=$hold;RuntimePending=$runtimePending;Now=$now.ToString('o')})
+    $script:cases+=@([pscustomobject]@{Name=$name;Expected=$expected;ExpectedKind=$expectedKind;Health=$h;State=$state;Identity=$identity;IdentityOk=$identityOk;TaskState=$task;Hold=$hold;Now=$now.ToString('o')})
 }
 Add-Case 'fresh-current-run' $true $null
 Add-Case 'age-119' $true {param($h)$h.Time=$now.AddSeconds(-119).ToString('o')}
@@ -26,9 +26,6 @@ Add-Case 'worker-missing-or-pid-reused' $false $null $false
 Add-Case 'task-stopped-old-proxy-alive' $false $null $true 'Ready'
 Add-Case 'starting-is-not-ready' $false {param($h)$h.Status='Starting'}
 Add-Case 'checking-is-not-ready' $false {param($h)$h.Status='Checking'}
-Add-Case 'runtime-pending-status-is-not-ready' $false {param($h)$h.Status='RuntimeEvidencePending'} $true 'Running' $false 'RuntimeEvidencePending'
-Add-Case 'runtime-pending-marker-blocks-previous-healthy-result' $false $null $true 'Running' $false 'RuntimeEvidencePending' $true
-Add-Case 'safety-hold-takes-priority-over-runtime-pending-marker' $false $null $true 'Running' $true 'SafetyHold' $true
 Add-Case 'previous-run-safety-result' $false {param($h)$h.LastSafetyCheck=$now.AddSeconds(-61).ToString('o')}
 Add-Case 'stale-safety-completion' $false {param($h)$h.SupervisorStarted=$now.AddSeconds(-300).ToString('o');$h.LastSafetyCheck=$now.AddSeconds(-121).ToString('o')}
 Add-Case 'missing-egress-result' $false {param($h)$h.LastVerifiedEgress=$null}
@@ -55,8 +52,6 @@ try {
             foreach($c in $Cases){
                 $hold=Get-GuardPath 'private\safety-hold.json'
                 if($c.Hold){[IO.File]::WriteAllText($hold,'{}')}elseif(Test-Path -LiteralPath $hold){Remove-Item -LiteralPath $hold}
-                $runtimePending=Get-GuardPath 'private\runtime-evidence-pending.json'
-                if($c.RuntimePending){[IO.File]::WriteAllText($runtimePending,'{}')}elseif(Test-Path -LiteralPath $runtimePending){Remove-Item -LiteralPath $runtimePending}
                 $script:FixtureIdentity=$c.IdentityOk
                 $r=Get-GuardHealthAssessment -Health $c.Health -State $c.State -NowUtc $Now -TaskState $c.TaskState -IdentityVerifier {return $script:FixtureIdentity}
                 if($r.Ready -ne $c.Expected){throw ('PowerShell health case failed: '+$c.Name+' '+$r.Reason)}
@@ -68,8 +63,8 @@ try {
     $cases|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $fixture 'cases.json') -Encoding utf8
     $source=@'
 using System;using System.IO;using System.Web.Script.Serialization;
-public class ContractCase {public string Name;public bool Expected;public ClaudeGuardWindow.HealthResult Health;public ClaudeGuardWindow.DeploymentResult State;public ClaudeGuardWindow.HostIdentity Identity;public bool IdentityOk;public string TaskState;public bool Hold;public bool RuntimePending;public string Now;}
-public class ContractRunner {public static int Main(string[] args){var cases=new JavaScriptSerializer().Deserialize<ContractCase[]>(File.ReadAllText(args[0]));foreach(var c in cases){string failure=ClaudeGuardWindow.ValidateHealth(c.Health,c.State,c.Identity,DateTimeOffset.Parse(c.Now),c.IdentityOk&&c.TaskState=="Running",c.Hold,c.RuntimePending);if((failure==null)!=c.Expected){Console.Error.WriteLine(c.Name+": "+failure);return 1;}}Console.WriteLine("C# health contract cases passed: "+cases.Length);return 0;}}
+public class ContractCase {public string Name;public bool Expected;public ClaudeGuardWindow.HealthResult Health;public ClaudeGuardWindow.DeploymentResult State;public ClaudeGuardWindow.HostIdentity Identity;public bool IdentityOk;public string TaskState;public bool Hold;public string Now;}
+public class ContractRunner {public static int Main(string[] args){var cases=new JavaScriptSerializer().Deserialize<ContractCase[]>(File.ReadAllText(args[0]));foreach(var c in cases){string failure=ClaudeGuardWindow.ValidateHealth(c.Health,c.State,c.Identity,DateTimeOffset.Parse(c.Now),c.IdentityOk&&c.TaskState=="Running",c.Hold);if((failure==null)!=c.Expected){Console.Error.WriteLine(c.Name+": "+failure);return 1;}}Console.WriteLine("C# health contract cases passed: "+cases.Length);return 0;}}
 '@
     $sourcePath=Join-Path $fixture 'ContractRunner.cs';[IO.File]::WriteAllText($sourcePath,$source)
     $compiler=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'

@@ -111,6 +111,8 @@ function Assert-GuardSupervisorTask($Task,$State) {
         if(-not $node){if($defaults.ContainsKey($key) -and $defaults[$key] -eq $expectedSettings[$key]){continue};throw ('Supervisor task setting missing: '+$key)}
         if($node.InnerText -ne $expectedSettings[$key]){throw ('Supervisor task setting changed: '+$key)}
     }
+    $priorityNode=$xml.SelectSingleNode('/t:Task/t:Settings/t:Priority',$ns)
+    if($priorityNode -and $priorityNode.InnerText -notin @('4','5','6','7')){throw 'Supervisor task priority changed outside normal bounds.'}
 }
 function Register-GuardSupervisorTask {
     [CmdletBinding()]param([Parameter(Mandatory)]$State,$PreviousState,[switch]$AllowCreate)
@@ -127,7 +129,7 @@ function Register-GuardSupervisorTask {
     $definition.RegistrationInfo.Description='Claude 专用代理：无窗口宿主、固定出口检查与每分钟后台恢复。'
     $definition.Principal.UserId=$State.UserSid;$definition.Principal.LogonType=3;$definition.Principal.RunLevel=0
     $settings=$definition.Settings
-    $settings.Hidden=$true;$settings.Enabled=$true;$settings.AllowDemandStart=$true
+    $settings.Hidden=$true;$settings.Enabled=$true;$settings.AllowDemandStart=$true;$settings.Priority=4
     $settings.DisallowStartIfOnBatteries=$false;$settings.StopIfGoingOnBatteries=$false
     $settings.ExecutionTimeLimit='PT0S';$settings.MultipleInstances=2
     $settings.RestartCount=3;$settings.RestartInterval='PT1M';$settings.StartWhenAvailable=$true;$settings.WakeToRun=$false

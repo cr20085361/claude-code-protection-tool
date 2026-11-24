@@ -1,6 +1,14 @@
 # 更新记录
 
-当前版本 **v1.9.3 · 第 35 次源码迭代**。
+当前版本 **v1.10.0 · 第 36 次源码迭代**。
+
+## v1.10.0 (2026-11-24)
+
+从源头修复高负载下 Python 环境探测超时误报、断网后客户端停留报错不保护性退出，以及已打开客户端时点击“维护版本”覆盖维护完成指针导致持续提示“防护维护未完成”的三项根因问题：
+
+- **守护调度优先级提权与进程内原生 PEB 环境读取**（`ClaudeSupervisorHost.cs`、`ClaudeGuard-Lifecycle.ps1`、`ClaudeGuard.psm1`、`ClaudeGuard-Runtime.psm1`）：修复计划任务默认 `Priority=7`（`BelowNormal` CPU + `VeryLow` I/O + `Low` 内存页优先级）在本地子代理高负载时造成防火墙复核拉长与外部 `python.exe` 冷启动超时的问题；任务定义设为 `Priority=4`，宿主、守护 worker 与专用代理启动/领养时统一提升至 `Normal` CPU/I/O/Page 优先级；同账号管理员上下文同步纳入当前账号 `HKCU` 与 `LOCALAPPDATA` 下的 64 位 CPython 3 发现路径，并在部署哈希匹配时启用进程内原生 PEB 环境读取器（亚毫秒级零子进程开销，异常自动回退隔离 Python 读取器）。
+- **断连连续 2 次探测失败保护性退出与安全暂停会话清理**（`ClaudeGuard-Supervisor-v2.ps1`、`ClaudeGuard-Health.ps1`、`ClaudeGuardLauncher.cs`）：移除 v1.9.3 在读证超时时自行关停专用代理却保留 Claude 运行的缺陷分支；运行期间首次出口探测失败且存在受保护会话时缩短至 10 秒快速复测（避免单次瞬时抖动误杀），连续第 2 次出口失败或专用代理退避/绑定网卡断开时立即终止运行中的 Claude Desktop 与本地 Code（记录 `ProtectedSessionStopped` 事件且不写 `safety-hold.json`，网络恢复后可直接重开），仅出口漂移或策略/规则异常才进入 `SafetyHold` 并同步终止受保护进程。
+- **非 TUN 风险分实时联动与历史维护完成记录消解**（`ClaudeGuard-NetworkEnv.psm1`、`ClaudeGuard-UiBridge.ps1`、`ClaudeGuardLauncher.cs`）：动态风险评分直接联动 `deployment.json` 专用代理监听状态（`10818` 缺失立扣 `+50` 分，不再因共享 `10808` 存活而继续报 `11/100 (A)`）及 `supervisor-health.json` 出口异常（立扣 `+20` 分突破门限）；`ClaudeGuard-UiBridge.ps1` 将客户端运行预检移至创建维护记录之前，且 `HasVerifiedLaterMaintenance` 在最新维护仅因未改基线预检失败时回溯校验规范 `maintenance-operation-*.json` 完成记录，消除“防护维护未完成”误报。
 
 ## v1.9.3 (2026-11-24)
 

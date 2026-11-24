@@ -246,6 +246,34 @@ try {
         }
         $critical = Get-NetworkEnvRiskScore -Baseline $noProxyBaseline -ConfigPath $testRiskCfg
         if ($critical.Score -lt 55 -or $critical.PassedGate) { throw 'Missing local proxy must push score above threshold and block.' }
+
+        # Missing dedicated Claude proxy (10818) must add +50 even when shared v2rayN (10808) is listening
+        $dedicatedDownBaseline = [pscustomobject]@{
+            SystemProxy           = $protectedBaseline.SystemProxy
+            Listeners             = $protectedBaseline.Listeners
+            DedicatedGuardMissing = $true
+            BrowserPolicies       = $protectedBaseline.BrowserPolicies
+            CliStatus             = $protectedBaseline.CliStatus
+            IPv6Interfaces        = @()
+            TimezoneId            = 'China Standard Time'
+            Connectivity          = $null
+        }
+        $dedDownScore = Get-NetworkEnvRiskScore -Baseline $dedicatedDownBaseline -ConfigPath $testRiskCfg
+        if ($dedDownScore.Score -lt 60 -or $dedDownScore.PassedGate) { throw 'Missing dedicated guard proxy must breach risk gate even when shared proxy is up.' }
+
+        # Supervisor egress outage (+20) must breach the default <=20 risk gate
+        $egressOutageBaseline = [pscustomobject]@{
+            SystemProxy           = $protectedBaseline.SystemProxy
+            Listeners             = $protectedBaseline.Listeners
+            DedicatedGuardMissing = $false
+            BrowserPolicies       = $protectedBaseline.BrowserPolicies
+            CliStatus             = $protectedBaseline.CliStatus
+            IPv6Interfaces        = @()
+            TimezoneId            = 'China Standard Time'
+            Connectivity          = [pscustomobject]@{ Error = 'GuardEgressUnavailable: UpstreamUnavailable (failures=1)'; DirectAnthropicBlocked = $true }
+        }
+        $egressScore = Get-NetworkEnvRiskScore -Baseline $egressOutageBaseline -ConfigPath $testRiskCfg
+        if ($egressScore.Score -lt 30 -or $egressScore.PassedGate) { throw 'Supervisor egress outage must add +20 risk points and breach <=20 gate.' }
     }
 
     Pass 'dynamic-runtime-watch-autoheal-and-warn' {

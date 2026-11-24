@@ -1,6 +1,7 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([string]$RunId='',[int]$HostPid=0,[string]$HostStarted='')
 $ErrorActionPreference='Stop'
+try{[Diagnostics.Process]::GetCurrentProcess().PriorityClass=[Diagnostics.ProcessPriorityClass]::Normal}catch{}
 $supervisorStarted=[Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime().ToString('o')
 try {
     Import-Module (Join-Path $PSScriptRoot 'ClaudeGuard.psm1') -Force
@@ -37,8 +38,8 @@ $lastEgressCheck=$null
 $lastEgressAttempt=$null
 $safetyHold=$null
 $holdPath=Get-GuardPath 'private\safety-hold.json'
-$runtimePendingPath=Get-GuardPath 'private\runtime-evidence-pending.json'
-$runtimeEvidencePending=Test-Path -LiteralPath $runtimePendingPath
+$legacyPendingPath=Get-GuardPath 'private\runtime-evidence-pending.json'
+if(Test-Path -LiteralPath $legacyPendingPath){Remove-Item -LiteralPath $legacyPendingPath -ErrorAction SilentlyContinue}
 $lastTick=[datetime]::UtcNow
 $nextSafetyCheck=[datetime]::MinValue
 $activeCodeCount=0
@@ -72,8 +73,7 @@ function Set-SupervisorPhase([string]$Name) {
     $checkNow=[datetime]::UtcNow
     $validSafety=$lastSafetyCheck -and ($checkNow-([datetime]$lastSafetyCheck).ToUniversalTime()).TotalSeconds -ge 0 -and ($checkNow-([datetime]$lastSafetyCheck).ToUniversalTime()).TotalSeconds -le 120
     $validEgress=$lastEgressCheck -and ($checkNow-([datetime]$lastEgressCheck).ToUniversalTime()).TotalSeconds -ge 0 -and ($checkNow-([datetime]$lastEgressCheck).ToUniversalTime()).TotalSeconds -le 120
-    $script:status=if($runtimeEvidencePending){'RuntimeEvidencePending'}
-        elseif(-not $failures -and $validSafety -and $validEgress -and $lastEgress){if($lastEgress.ProbeDegraded){'ProbeDegraded'}else{'Healthy'}}else{'Checking'}
+    $script:status=if(-not $failures -and $validSafety -and $validEgress -and $lastEgress){if($lastEgress.ProbeDegraded){'ProbeDegraded'}else{'Healthy'}}else{'Checking'}
     Write-SupervisorEvent 'PhaseStarted' @{Phase=$Name;PhaseStarted=$phaseStarted}
     Write-SupervisorHealth
 }
@@ -84,35 +84,23 @@ function Complete-SupervisorPhase {
 function Save-SupervisorRecovery {
     Write-GuardJson $recoveryPath @{SchemaVersion=1;Updated=[datetime]::UtcNow.ToString('o');RestartTimes=@($restartTimes|ForEach-Object {$_.ToUniversalTime().ToString('o')});NextRestart=$nextRestart.ToUniversalTime().ToString('o');ConsecutiveEgressFailures=$failures;NextProbe=$nextProbe.ToUniversalTime().ToString('o')}
 }
-function Test-SupervisorRuntimeProxyPresent {
-    if($owned){
-        if(-not $owned.HasExited){return $true}
+function Stop-SupervisorActiveSessions([string]$Trigger,[string]$Detail) {
+    if(-not $deployment){return 0}
+    $targets=@($deployment.Desktop.Path)+@($deployment.CodePaths)
+    $active=@(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue|Where-Object {$_.ExecutablePath -in $targets})
+    if(-not $active.Count){return 0}
+    $stoppedCount=0
+    if(Get-Command Stop-GuardProtectedProcesses -ErrorAction SilentlyContinue){
+        $stopped=@(Stop-GuardProtectedProcesses $deployment)
+        $stoppedCount=$stopped.Count
     }else{
-        # A restarted worker can still inherit an established connection from
-        # the previous run's proxy even when there is no listening socket.
-        $trackedPath=Get-GuardPath 'private\proxy-process.json'
-        if(Test-Path -LiteralPath $trackedPath){
-            $tracked=Read-GuardJson $trackedPath
-            $live=Get-Process -Id $tracked.Pid -ErrorAction SilentlyContinue
-            if($live -and $live.StartTime -and $live.StartTime.ToUniversalTime().Ticks -eq ([datetimeoffset]$tracked.Started).UtcTicks){return $true}
-        }
+        $snapshot=[pscustomobject]@{OwnedProcesses=@($active|ForEach-Object {$lp=Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue;if($lp){@{Pid=$_.ProcessId;Started=$lp.StartTime.ToUniversalTime().ToString('o')}}}|Where-Object {$_})}
+        Stop-GuardUnsafeRuntime $snapshot
+        $stoppedCount=$active.Count
     }
-    @(Get-GuardTcpListeners|Where-Object LocalPort -eq 10818).Count -gt 0
-}
-function Suspend-SupervisorRuntimeProxy {
-    try{
-        if(-not (Test-SupervisorRuntimeProxyPresent)){return $true}
-        Stop-GuardProxyEmergency
-        # The process may have been signaled but still be finishing shutdown.
-        $clock=[Diagnostics.Stopwatch]::StartNew()
-        while(Test-SupervisorRuntimeProxyPresent){
-            if($clock.ElapsedMilliseconds -ge 2000){return $false}
-            [Threading.Thread]::Sleep(100)
-        }
-        return $true
-    }catch{
-        return $false
-    }
+    $script:activeCodeCount=0
+    Write-SupervisorEvent 'ProtectedSessionStopped' @{RunId=$RunId;Trigger=$Trigger;Reason=$Detail;DetectedCount=$active.Count;StoppedCount=$stoppedCount;ConsecutiveFailures=$failures}
+    return $stoppedCount
 }
 function Assert-SupervisorHashes {
     if(-not $deployment.PSObject.Properties['Reliability']){throw 'Supervisor deployment or script changed.'}
@@ -158,13 +146,10 @@ try {
                 $owned.WaitForExit();Write-SupervisorEvent 'ProxyExited' @{Pid=$owned.Id;ExitCode=$owned.ExitCode;ObservedAt=[datetime]::UtcNow.ToString('o')}
                 $owned.Dispose();$owned=$null
             }
-            if($runtimeEvidencePending){
-                if(-not (Suspend-SupervisorRuntimeProxy)){throw 'Runtime safety mismatch: dedicated proxy isolation failed'}
-                Assert-GuardCore -ConfigurationOnly
-            }elseif(-not @(Get-GuardListener).Count){
-                if($now -lt $nextRestart){$status='Backoff';$reason='等待有限重试';throw [OperationCanceledException]::new('backoff')}
+            if(-not @(Get-GuardListener).Count){
+                if($now -lt $nextRestart){$status='Backoff';$reason='等待有限重试';$null=Stop-SupervisorActiveSessions 'ProxyBackoff' $reason;throw [OperationCanceledException]::new('backoff')}
                 for($i=$restartTimes.Count-1;$i -ge 0;$i--){if($restartTimes[$i] -lt $now.AddMinutes(-5)){$restartTimes.RemoveAt($i)}}
-                if($restartTimes.Count -ge 3){$nextRestart=$now.AddMinutes(5);Save-SupervisorRecovery;$status='Backoff';$reason='专用代理启动重试过于频繁，五分钟后重试';throw [OperationCanceledException]::new('backoff')}
+                if($restartTimes.Count -ge 3){$nextRestart=$now.AddMinutes(5);Save-SupervisorRecovery;$status='Backoff';$reason='专用代理启动重试过于频繁，五分钟后重试';$null=Stop-SupervisorActiveSessions 'ProxyBackoff' $reason;throw [OperationCanceledException]::new('backoff')}
                 # 先保存尝试次数，失败的启动与 worker 重启也占用同一个恢复预算。
                 $restartTimes.Add($now);Save-SupervisorRecovery
                 Start-GuardProxy -SupervisorWorker
@@ -173,13 +158,11 @@ try {
                 Write-SupervisorEvent 'ProxyStarted' @{Pid=$tracked.Pid;ProcessStart=$tracked.Started}
                 $nextProbe=[datetime]::MinValue;Save-SupervisorRecovery
             }
-            if(-not $runtimeEvidencePending){
-                if(Sync-GuardProxyProcess -SupervisorWorker){Write-SupervisorEvent 'ProxyTrackingRecovered' (Read-GuardJson (Get-GuardPath 'private\proxy-process.json'))}
-                Assert-GuardCore
-                $proxyPid=(Read-GuardJson (Get-GuardPath 'private\proxy-process.json')).Pid
-                if(-not $owned){$owned=Get-Process -Id $proxyPid;$null=$owned.Handle;Write-SupervisorEvent 'ProxyAdopted' @{Pid=$proxyPid}}
-            }
-            if($runtimeEvidencePending -or $now -ge $nextSafetyCheck -or -not $lastSafetyCheck){
+            if(Sync-GuardProxyProcess -SupervisorWorker){Write-SupervisorEvent 'ProxyTrackingRecovered' (Read-GuardJson (Get-GuardPath 'private\proxy-process.json'))}
+            Assert-GuardCore
+            $proxyPid=(Read-GuardJson (Get-GuardPath 'private\proxy-process.json')).Pid
+            if(-not $owned){$owned=Get-Process -Id $proxyPid;$null=$owned.Handle;Write-SupervisorEvent 'ProxyAdopted' @{Pid=$proxyPid}}
+            if($now -ge $nextSafetyCheck -or -not $lastSafetyCheck){
                 $safetyStarted=[datetime]::UtcNow
                 Assert-GuardPolicy -RuntimeOnly
                 Complete-SupervisorPhase
@@ -196,40 +179,9 @@ try {
                         }
                     }catch{Write-Warning 'Could not append runtime reader diagnostics; see runtime-safety.json.'}
                 }
-                if(-not $runtime.Safe -and @($runtime.Issues).Count -eq 1 -and
-                    $runtime.Issues[0] -eq 'RuntimeEnvironmentUnreadable' -and $runtime.RuntimeEvidenceTimedOut -eq $true){
-                    $firstTimeout=-not $runtimeEvidencePending
-                    if($firstTimeout){
-                        try{Write-GuardJson $runtimePendingPath @{Time=[datetime]::UtcNow.ToString('o');RunId=$RunId}}
-                        catch{
-                            try{Stop-GuardUnsafeRuntime $runtime}
-                            finally{throw 'Runtime safety mismatch: evidence pause could not be persisted'}
-                        }
-                        $runtimeEvidencePending=$true
-                    }
-                    $lastSafetyCheck=$lastEgressCheck=$lastEgress=$null
-                    $status='RuntimeEvidencePending';$reason='Runtime evidence read timed out; dedicated traffic pending verification.'
-                    if(-not (Suspend-SupervisorRuntimeProxy)){
-                        try{Stop-GuardUnsafeRuntime $runtime}
-                        finally{throw 'Runtime safety mismatch: dedicated proxy isolation failed'}
-                    }
-                    $proxyPid=$null
-                    if($firstTimeout){Write-SupervisorEvent 'RuntimeEvidencePaused' @{RunId=$RunId;TimedOutPids=$runtime.TimedOutEnvironmentPids}}
-                    throw [OperationCanceledException]::new('runtime-evidence-pending')
-                }
                 if(-not $runtime.Safe){Stop-GuardUnsafeRuntime $runtime;throw ('Runtime safety mismatch: '+($runtime.Issues -join ','))}
                 $lastSafetyCheck=[datetime]::UtcNow.ToString('o');$nextSafetyCheck=$safetyStarted.AddSeconds(60)
                 Complete-SupervisorPhase
-                if($runtimeEvidencePending){
-                    # Fresh evidence is required before the next iteration can start the proxy.
-                    $lastEgressCheck=$lastEgress=$null
-                    $nextProbe=[datetime]::MinValue
-                    Remove-Item -LiteralPath $runtimePendingPath
-                    $runtimeEvidencePending=$false
-                    $status='Checking';$reason=$null
-                    Write-SupervisorEvent 'RuntimeEvidenceRestored' @{RunId=$RunId;LastSafetyCheck=$lastSafetyCheck}
-                    throw [OperationCanceledException]::new('runtime-evidence-restored')
-                }
             }else{Complete-SupervisorPhase}
             if([datetime]::UtcNow -ge $nextProbe){
                 Set-SupervisorPhase 'Egress';$lastEgressAttempt=[datetime]::UtcNow.ToString('o');Write-SupervisorHealth
@@ -243,11 +195,22 @@ try {
                 }catch{
                     if($_.Exception.Message -match 'Fixed egress mismatch'){throw}
                     $failures++;$reason=$_.Exception.Message
-                    $nextProbe=[datetime]::UtcNow.AddSeconds([Math]::Min(300,30*[Math]::Pow(2,[Math]::Min(4,$failures-1))));Save-SupervisorRecovery
+                    $targets=@($deployment.Desktop.Path)+@($deployment.CodePaths)
+                    $liveProtected=@(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue|Where-Object {$_.ExecutablePath -in $targets})
+                    if($failures -eq 1 -and $liveProtected.Count -gt 0){
+                        $nextProbe=[datetime]::UtcNow.AddSeconds(10)
+                    }else{
+                        $nextProbe=[datetime]::UtcNow.AddSeconds([Math]::Min(300,30*[Math]::Pow(2,[Math]::Min(4,$failures-1))))
+                    }
+                    Save-SupervisorRecovery
                     Write-SupervisorEvent 'EgressFailed' @{Completed=[datetime]::UtcNow.ToString('o');ConsecutiveFailures=$failures;Reason=$reason}
-                    $liveCode=@(Get-CimInstance Win32_Process|Where-Object {$_.ExecutablePath -in @($deployment.CodePaths)}).Count
-                    if($failures -eq 3 -and $liveCode -eq 0){Stop-GuardProxy;Write-SupervisorEvent 'ProxyRefreshRequested' @{Reason='three-consecutive-egress-failures'}}
-                    elseif($failures -eq 3){Write-SupervisorEvent 'ProxyRefreshDeferred' @{Reason='active-local-code-session';CodeProcessCount=$liveCode}}
+                    if($failures -ge 2 -and $liveProtected.Count -gt 0){
+                        $null=Stop-SupervisorActiveSessions 'UpstreamUnavailable' $reason
+                    }
+                    if($failures -eq 3){
+                        Stop-GuardProxy
+                        Write-SupervisorEvent 'ProxyRefreshRequested' @{Reason='three-consecutive-egress-failures'}
+                    }
                 }
             }
             Set-SupervisorPhase 'Version'
@@ -258,24 +221,29 @@ try {
             $freshSafety=$lastSafetyCheck -and $safetyAge -ge 0 -and $safetyAge -le 120
             $freshEgress=$lastEgressCheck -and $egressAge -ge 0 -and $egressAge -le 120
             $status=if($failures){'UpstreamUnavailable'}elseif(-not $freshSafety -or -not $freshEgress){'Checking'}elseif($lastEgress.ProbeDegraded){'ProbeDegraded'}else{'Healthy'}
-            if($current.Hash -ne $deployment.Desktop.Hash -or $current.Path -ne $deployment.Desktop.Path){$status='UpgradeRequired';$reason='Claude 已更新，需迁移防护后使用'}
+            if($current.Hash -ne $deployment.Desktop.Hash -or $current.Path -ne $deployment.Desktop.Path){
+                $status='UpgradeRequired';$reason='Claude 已更新，需迁移防护后使用'
+                $null=Stop-SupervisorActiveSessions 'UpgradeRequired' $reason
+            }
             $phase='Idle';$phaseStarted=[datetime]::UtcNow.ToString('o')
         }catch [OperationCanceledException] {
         }catch{
             $reason=$_.Exception.Message
             if($reason -match 'Fixed egress mismatch|Runtime safety mismatch|changed|disabled|IPv4-only|Firewall rule|Shared proxy|policy|execution gate'){
+                $null=Stop-SupervisorActiveSessions 'SafetyHold' $reason
                 $safetyHold=$reason;Write-GuardJson $holdPath @{Time=[datetime]::UtcNow.ToString('o');Reason=$reason}
                 Stop-GuardProxyEmergency;$status='SafetyHold';$phase='SafetyHold';$phaseStarted=[datetime]::UtcNow.ToString('o')
                 Write-SupervisorEvent 'SafetyStop' @{Reason=$reason}
             }else{
                 $status=if($reason -match 'interface unavailable'){'InterfaceUnavailable'}elseif($reason -match 'Desktop updated'){'UpgradeRequired'}else{'ProtectionError'}
+                $null=Stop-SupervisorActiveSessions $status $reason
                 $nextRestart=[datetime]::UtcNow.AddSeconds(30);Save-SupervisorRecovery
             }
         }
         Write-SupervisorHealth
         # 只统计循环之间的空闲间隔，防火墙等检查自身的耗时不构成睡眠唤醒。
         $lastTick=[datetime]::UtcNow
-        if($runtimeEvidencePending -and -not $safetyHold){Start-Sleep -Seconds 15}else{Start-Sleep -Seconds 5}
+        Start-Sleep -Seconds 5
     }
 }catch{
     $reason=$_.Exception.Message;$status='ProtectionError';$phase='Fatal';$phaseStarted=[datetime]::UtcNow.ToString('o')

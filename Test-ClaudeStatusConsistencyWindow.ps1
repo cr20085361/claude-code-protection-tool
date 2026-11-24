@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$LauncherAssembly,
     [string]$ReportFile = (Join-Path $PSScriptRoot 'evidence\status-consistency-window-regression.json')
@@ -208,6 +208,18 @@ public static class StatusConsistencyRunner {
    Require(!ShowsRecovered(window),"new-installed-desktop-observation-withdraws-old-recovery");
   }
   using(var window=Open()){ObserveRecovery(window);Require(ShowsRecovered(window),"reopened-entry-rebuilds-recovery-from-durable-verified-records");}
+  Clear();RecoveryFixtures();using(var window=Open()){
+   string historical=File.ReadAllText(Path.Combine(root,"private","active-desktop-update.json"));
+   string preflightId=new string('f',32);
+   var harmless=new ClaudeGuardWindow.MaintenanceResult{SchemaVersion=1,ActionId=preflightId,Status="Failed",Phase="Failed",FailureKind="UnprotectedInstance",Reason="Claude 已从其他入口运行或尚未退出。",RecoveryRequired=false,BaselineChanged=false,StartedAt=DateTimeOffset.UtcNow.ToString("o"),CompletedAt=DateTimeOffset.UtcNow.ToString("o")};
+   Save("active-version-maintenance.json",harmless);Save("maintenance-operation-"+preflightId+".json",harmless);
+   ObserveRecovery(window);
+   Require(ShowsRecovered(window)&&File.ReadAllText(Path.Combine(root,"private","active-desktop-update.json"))==historical,"later-harmless-preflight-failure-preserves-verified-recovery");
+   harmless.BaselineChanged=true;
+   Save("active-version-maintenance.json",harmless);Save("maintenance-operation-"+preflightId+".json",harmless);
+   Invoke(window,"RefreshDesktopUpdate");
+   Require(!ShowsRecovered(window),"later-baseline-changed-failure-withdraws-recovery");
+  }
   foreach(string mutation in new[]{"missing-canonical","failed-canonical","older-completion","missing-completion-time","same-operation","missing-stage","missing-result","bad-result-name","result-failed","result-action","result-stage","result-desktop","result-code","deployment-desktop","deployment-code","old-update-time-missing","health-stale","health-hold","health-identity"}){
    Clear();RecoveryFixtures();using(var window=Open()){
     ObserveRecovery(window);Require(ShowsRecovered(window),"recovery-precondition-before-"+mutation);

@@ -839,14 +839,42 @@ function Get-NetworkEnvBaseline {
         $findings.Add([pscustomobject]@{ Code = 'GuardSafetyHoldActive'; Severity = 'Info'; Message = '注意：本项目专用守护当前存在 private/safety-hold.json 暂停状态，10818 专用代理可能未启动。' })
     }
 
+    $hasDeployment = Test-Path -LiteralPath (Get-NetworkEnvPath 'private\deployment.json')
+    $inMaintenance = Test-Path -LiteralPath (Get-NetworkEnvPath 'private\maintenance.json')
+    $dedicatedMissing = $false
+    if ($hasDeployment -and -not $inMaintenance -and -not $safetyHold) {
+        $dedUp = @($listeners | Where-Object { $_.Port -eq 10818 -and $_.TcpAccepting }).Count -gt 0
+        if (-not $dedUp) {
+            $dedicatedMissing = $true
+            $findings.Add([pscustomobject]@{ Code = 'DedicatedGuardProxyDown'; Severity = 'Critical'; Message = '专用代理 127.0.0.1:10818 当前未运行，Claude 受保护通道不可用。' })
+            $recommendations.Add('检查后台守护状态或点击安全入口“重新检查”恢复专用代理。')
+        }
+    }
+
+    $guardHealthError = $null
+    $healthFile = Get-NetworkEnvPath 'private\supervisor-health.json'
+    if ($hasDeployment -and -not $inMaintenance -and (Test-Path -LiteralPath $healthFile)) {
+        try {
+            $gh = Read-NetworkEnvJson $healthFile
+            if ($gh -and ($gh.Status -in @('UpstreamUnavailable', 'InterfaceUnavailable', 'Backoff', 'ProtectionError') -or
+                ($gh.PSObject.Properties['ConsecutiveFailures'] -and [int]$gh.ConsecutiveFailures -gt 0))) {
+                $guardHealthError = ("后台守护检测到专用节点或网络异常 (Status={0}, ConsecutiveFailures={1})" -f $gh.Status, $gh.ConsecutiveFailures)
+                $findings.Add([pscustomobject]@{ Code = 'GuardEgressUnavailable'; Severity = 'High'; Message = $guardHealthError })
+            }
+        } catch {}
+    }
+
     $connectivity = $null
     if ($CheckConnectivity -and $listeners.Count -gt 0) {
         try {
-            $sel = Get-NetworkEnvProxySelection -ProxyMode Auto -Listeners $listeners
+            $preferMode = if ($hasDeployment -and @($listeners | Where-Object { $_.Port -eq 10818 -and $_.TcpAccepting }).Count -gt 0) { 'Dedicated' } else { 'Auto' }
+            $sel = Get-NetworkEnvProxySelection -ProxyMode $preferMode -Listeners $listeners
             $connectivity = Test-NetworkEnvEndpointConnectivity -Port $sel.Port
         } catch {
             $connectivity = [pscustomobject]@{ Error = $_.Exception.Message }
         }
+    } elseif ($guardHealthError) {
+        $connectivity = [pscustomobject]@{ Error = $guardHealthError }
     }
 
     $highOrCritical = @($findings | Where-Object { $_.Severity -in @('Critical', 'High') }).Count
@@ -892,8 +920,9 @@ function Get-NetworkEnvBaseline {
         CliStatus         = $cliStatus
         IPv6Interfaces    = $ipv6
         TimezoneId        = $tz.Id
-        GuardSafetyHold   = $safetyHold
-        Connectivity      = $connectivity
+        GuardSafetyHold        = $safetyHold
+        DedicatedGuardMissing  = $dedicatedMissing
+        Connectivity           = $connectivity
         Findings          = @($findings)
         Recommendations   = @($recommendations)
         SummaryText       = ($lines -join [Environment]::NewLine)
@@ -1069,13 +1098,16 @@ function Get-NetworkEnvRiskScore {
     # 1. Base node baseline (+2)
     $items.Add((New-NetworkEnvRiskItem -Id 'BaseNode' -Label '代理节点基准' -Points 2 -MaxPoints 2 -Status 'Info' -Detail '干净非家宽代理节点基准风险 (+2)' -FixHint ''))
 
-    # 2. Local proxy listener (+50 if missing/unreachable)
+    # 2. Local proxy listener (+50 if missing/unreachable or dedicated guard port down)
     $listeners = @($b.Listeners)
+    $dedicatedDown = ($b.PSObject.Properties['DedicatedGuardMissing'] -and [bool]$b.DedicatedGuardMissing)
     $selectedProxy = $null
-    if ($listeners.Count -gt 0) {
+    if (-not $dedicatedDown -and $listeners.Count -gt 0) {
         try { $selectedProxy = Get-NetworkEnvProxySelection -ProxyMode $effectiveMode -Listeners $listeners } catch { $selectedProxy = $null }
     }
-    if (-not $selectedProxy) {
+    if ($dedicatedDown) {
+        $items.Add((New-NetworkEnvRiskItem -Id 'LocalProxy' -Label '本地代理监听' -Points 50 -MaxPoints 50 -Status 'Risk' -Detail '专用代理 127.0.0.1:10818 未运行（Claude 受保护通道已断开）' -FixHint '点击安全入口“重新检查”或检查后台守护状态'))
+    } elseif (-not $selectedProxy) {
         $items.Add((New-NetworkEnvRiskItem -Id 'LocalProxy' -Label '本地代理监听' -Points 50 -MaxPoints 50 -Status 'Risk' -Detail '未检测到可用本地代理端口 (10818/10808/7890 等)' -FixHint '先启动本地代理客户端或恢复守护'))
     } else {
         $items.Add((New-NetworkEnvRiskItem -Id 'LocalProxy' -Label '本地代理监听' -Points 0 -MaxPoints 50 -Status 'Pass' -Detail ("已就绪 127.0.0.1:{0} ({1})" -f $selectedProxy.Port, $selectedProxy.Role) -FixHint ''))
