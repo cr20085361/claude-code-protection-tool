@@ -24,27 +24,76 @@ function Get-GuardReaderPythonCandidates {
             ForEach-Object {Join-Path $_.FullName 'python.exe'}
     }
 }
-function Resolve-GuardReaderPython([int]$TimeoutMilliseconds=4000) {
+function Invoke-GuardReaderPythonProbe([string]$Path,[int]$TimeoutMilliseconds) {
     $clock=[Diagnostics.Stopwatch]::StartNew()
-    foreach($path in @(Get-GuardReaderPythonCandidates | Select-Object -Unique)){
-        if($path -notmatch '^[A-Za-z]:\\' -or [IO.Path]::GetFileName($path) -ine 'python.exe' -or
-            $path -match '\\WindowsApps\\' -or -not [IO.File]::Exists($path)){continue}
-        $remaining=$TimeoutMilliseconds-[int]$clock.ElapsedMilliseconds
-        if($remaining -le 0){break}
-        $info=[Diagnostics.ProcessStartInfo]::new()
-        $info.FileName=$path;$info.UseShellExecute=$false;$info.CreateNoWindow=$true
-        $info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
-        foreach($arg in @('-I','-S','-c','import ctypes, json, pathlib, struct, sys, threading, urllib.parse; sys.exit(0 if sys.implementation.name == "cpython" and sys.version_info.major == 3 and struct.calcsize("P") == 8 else 1)')){$info.ArgumentList.Add($arg)}
-        $probe=[Diagnostics.Process]::new();$probe.StartInfo=$info
-        try{
-            if(-not $probe.Start()){continue}
+    $result=[ordered]@{Outcome='StartFailed';ExitCode=$null;NativeErrorCode=$null;ElapsedMilliseconds=0}
+    $info=[Diagnostics.ProcessStartInfo]::new()
+    $info.FileName=$Path;$info.UseShellExecute=$false;$info.CreateNoWindow=$true
+    $info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
+    foreach($arg in @('-I','-S','-c','import ctypes, json, pathlib, struct, sys, threading, urllib.parse; sys.exit(0 if sys.implementation.name == "cpython" and sys.version_info.major == 3 and struct.calcsize("P") == 8 else 1)')){$info.ArgumentList.Add($arg)}
+    $probe=[Diagnostics.Process]::new();$probe.StartInfo=$info
+    try{
+        if($probe.Start()){
             $null=$probe.StandardOutput.ReadToEndAsync();$null=$probe.StandardError.ReadToEndAsync()
-            if(-not $probe.WaitForExit([Math]::Min(1500,$remaining))){$probe.Kill();continue}
-            if($probe.ExitCode -eq 0){return [IO.Path]::GetFullPath($path)}
-        }catch [System.ComponentModel.Win32Exception] {continue}
-        finally{$probe.Dispose()}
+            $remaining=[Math]::Max(0,$TimeoutMilliseconds-[int]$clock.ElapsedMilliseconds)
+            if($remaining -gt 0 -and $probe.WaitForExit($remaining) -and $clock.ElapsedMilliseconds -le $TimeoutMilliseconds){
+                $result.ExitCode=$probe.ExitCode
+                $result.Outcome=if($result.ExitCode -eq 0){'Passed'}else{'NonZeroExit'}
+            }else{
+                $result.Outcome='TimedOut'
+                try{$probe.Kill()}catch [InvalidOperationException] {}catch [System.ComponentModel.Win32Exception] {$result.NativeErrorCode=$_.Exception.NativeErrorCode}
+            }
+        }
+    }catch [System.ComponentModel.Win32Exception] {
+        $result.NativeErrorCode=$_.Exception.NativeErrorCode
+    }finally{
+        $probe.Dispose()
+        $result.ElapsedMilliseconds=$clock.ElapsedMilliseconds
     }
-    throw 'RuntimeReaderUnavailable: 未找到可运行的 64 位 Python 3。请安装或修复 Windows 64 位 CPython，再重试。'
+    [pscustomobject]$result
+}
+function Resolve-GuardReaderPython([ValidateRange(1,8000)][int]$TimeoutMilliseconds=8000,[ref]$ProbeFailures) {
+    $clock=[Diagnostics.Stopwatch]::StartNew()
+    $failures=[Collections.Generic.List[object]]::new()
+    $candidates=[Collections.Generic.List[object]]::new()
+    $paths=@(Get-GuardReaderPythonCandidates | Select-Object -Unique)
+    for($index=0;$index -lt $paths.Count -and $clock.ElapsedMilliseconds -lt $TimeoutMilliseconds;$index++){
+        $path=$paths[$index]
+        $outcome=if($path -notmatch '^[A-Za-z]:\\' -or [IO.Path]::GetFileName($path) -ine 'python.exe' -or $path -match '\\WindowsApps\\'){'InvalidCandidate'}elseif(-not [IO.File]::Exists($path)){'MissingFile'}
+        if($outcome){
+            $failures.Add([pscustomobject]@{CandidateIndex=$index+1;Round=0;Outcome=$outcome;ElapsedMilliseconds=$null;ExitCode=$null;NativeErrorCode=$null})
+        }else{$candidates.Add([pscustomobject]@{Index=$index+1;Path=$path})}
+    }
+    # Try the alternatives before returning to an interpreter that failed once.
+    # Never accept a cached success or mark a timed-out runtime snapshot safe.
+    foreach($round in 1,2){
+        if(-not $candidates.Count){break}
+        $limit=if($round -eq 1){1500}else{2250}
+        if($round -eq 2){
+            $remaining=$TimeoutMilliseconds-[int]$clock.ElapsedMilliseconds
+            if($remaining -le 1){break}
+            Start-Sleep -Milliseconds ([Math]::Min(150,$remaining-1))
+        }
+        foreach($candidate in $candidates){
+            $remaining=$TimeoutMilliseconds-[int]$clock.ElapsedMilliseconds
+            if($remaining -le 0){break}
+            $probe=Invoke-GuardReaderPythonProbe $candidate.Path ([Math]::Min($limit,$remaining))
+            if($probe.Outcome -eq 'Passed' -and $clock.ElapsedMilliseconds -le $TimeoutMilliseconds){
+                if($null -ne $ProbeFailures){$ProbeFailures.Value=$failures.ToArray()}
+                return [IO.Path]::GetFullPath($candidate.Path)
+            }
+            if($probe.Outcome -ne 'Passed'){
+                # Keep only numeric codes and fixed categories, never paths or child output.
+                $failures.Add([pscustomobject]@{CandidateIndex=$candidate.Index;Round=$round;Outcome=$probe.Outcome;ElapsedMilliseconds=$probe.ElapsedMilliseconds;ExitCode=$probe.ExitCode;NativeErrorCode=$probe.NativeErrorCode})
+            }
+        }
+    }
+    $summary=if($clock.ElapsedMilliseconds -ge $TimeoutMilliseconds){'BudgetExhausted'}elseif(-not $paths.Count){'NoCandidate'}
+    if($summary){
+        $failures.Add([pscustomobject]@{CandidateIndex=$null;Round=0;Outcome=$summary;ElapsedMilliseconds=$clock.ElapsedMilliseconds;ExitCode=$null;NativeErrorCode=$null})
+    }
+    if($null -ne $ProbeFailures){$ProbeFailures.Value=$failures.ToArray()}
+    throw 'RuntimeReaderUnavailable: 未能确认 64 位 CPython 3 可运行。请查看解释器探测诊断。'
 }
 function Invoke-GuardEnvironmentReader([string]$PythonPath,[string]$ReaderPath,[int]$ProcessId,[int]$TimeoutMilliseconds,[string]$LocalServicePath='',[long]$LocalServiceStarted=0) {
     if($TimeoutMilliseconds -le 0){return [pscustomobject]@{ExitCode=124;Output='';TimedOut=$true}}
@@ -211,8 +260,9 @@ function Get-GuardRuntimeSnapshot([ValidateRange(1,30000)][int]$EvidenceBudgetMi
     $localServices=@($listeners|Where-Object {$_.OwningProcess -in $descendants -and (Test-GuardLoopbackAddress $_.LocalAddress)})
     $readerClock=[Diagnostics.Stopwatch]::StartNew()
     $python=$null
+    $pythonProbeFailures=@()
     if($mains.Count -or $code.Count -or $connections.Count){
-        try{$python=Resolve-GuardReaderPython ([Math]::Min(4000,$EvidenceBudgetMilliseconds))}
+        try{$python=Resolve-GuardReaderPython ([Math]::Min(8000,$EvidenceBudgetMilliseconds)) -ProbeFailures ([ref]$pythonProbeFailures)}
         catch{if($_.Exception.Message -notlike 'RuntimeReaderUnavailable:*'){throw};$issues.Add('RuntimeReaderUnavailable')}
     }
     $previewServices=@();$previewPids=@();$standalonePids=@();$readerTimeoutPids=@();$deadlineExceeded=$false
@@ -330,7 +380,7 @@ function Get-GuardRuntimeSnapshot([ValidateRange(1,30000)][int]$EvidenceBudgetMi
         if(-not (Test-GuardRuntimeEnvironment $e)){$issues.Add('RuntimeEnvironmentMismatch')}
     }
     $identities=@($pids|ForEach-Object {$running=Get-Process -Id $_ -ErrorAction SilentlyContinue;if($running){@{Pid=$_;Started=$running.StartTime.ToUniversalTime().ToString('o')}}})
-    [pscustomobject]@{Time=[datetime]::UtcNow.ToString('o');Safe=($issues.Count -eq 0);Issues=@($issues);DesktopProcessCount=$desktop.Count;CodeProcessCount=$code.Count;UnexpectedConnections=@($unexpected|Select-Object OwningProcess,LocalAddress,LocalPort,RemoteAddress,RemotePort,State);UnconfirmedLoopbackConnections=@($unconfirmedLoopback|Select-Object OwningProcess,RemoteAddress,RemotePort,State);PreviewServices=$previewServices;PreviewMonitoredPids=$previewDescendants;PreviewServiceChecks=@($previewChecks);ListenerSource='GetExtendedTcpTable/OWNER_PID_LISTENER/IPv4+IPv6';PreviewListeners=@($listeners|Where-Object {$_.OwningProcess -in $checkedOwners}|Select-Object OwningProcess,LocalAddress,LocalPort,ReportedState);Environments=$environments;OwnedPids=@($pids);OwnedProcesses=$identities;EvidenceDeadlineExceeded=$deadlineExceeded;ReaderTimeoutPids=$readerTimeoutPids;EvidenceReaderElapsedMilliseconds=$readerClock.ElapsedMilliseconds}
+    [pscustomobject]@{Time=[datetime]::UtcNow.ToString('o');Safe=($issues.Count -eq 0);Issues=@($issues);DesktopProcessCount=$desktop.Count;CodeProcessCount=$code.Count;UnexpectedConnections=@($unexpected|Select-Object OwningProcess,LocalAddress,LocalPort,RemoteAddress,RemotePort,State);UnconfirmedLoopbackConnections=@($unconfirmedLoopback|Select-Object OwningProcess,RemoteAddress,RemotePort,State);PreviewServices=$previewServices;PreviewMonitoredPids=$previewDescendants;PreviewServiceChecks=@($previewChecks);ListenerSource='GetExtendedTcpTable/OWNER_PID_LISTENER/IPv4+IPv6';PreviewListeners=@($listeners|Where-Object {$_.OwningProcess -in $checkedOwners}|Select-Object OwningProcess,LocalAddress,LocalPort,ReportedState);Environments=$environments;OwnedPids=@($pids);OwnedProcesses=$identities;EvidenceDeadlineExceeded=$deadlineExceeded;ReaderTimeoutPids=$readerTimeoutPids;EvidenceReaderElapsedMilliseconds=$readerClock.ElapsedMilliseconds;PythonProbeFailures=$pythonProbeFailures}
 }
 function Get-GuardRuntimeSafety([ValidateRange(1,30000)][int]$EvidenceBudgetMilliseconds=30000,[ValidateRange(1,10000)][int]$ReaderTimeoutMilliseconds=10000) {
     $clock=[Diagnostics.Stopwatch]::StartNew()

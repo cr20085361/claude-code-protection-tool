@@ -32,7 +32,7 @@ function Get-FixtureSource([string]$Text,[switch]$Worker) {
     $Text
 }
 $body=Get-FixtureSource $source -Worker
-foreach($scenario in @('egress-drift','runtime-unsafe','tls-disabled','active-code-probe-failure','idle-probe-failure','existing-safety-hold','healthy-current-run','new-version-available','maintenance-before-hash','persisted-restart-budget','failed-start-persisted','persisted-egress-backoff','persisted-egress-success','existing-proxy-during-restart-backoff','stale-health','slow-egress','fatal-recovery-state','slow-cycle-not-resume','resume-keeps-egress-backoff','periodic-check-retains-valid-result')) {
+foreach($scenario in @('egress-drift','runtime-unsafe','runtime-reader-recovered','runtime-reader-unavailable','tls-disabled','active-code-probe-failure','idle-probe-failure','existing-safety-hold','healthy-current-run','new-version-available','maintenance-before-hash','persisted-restart-budget','failed-start-persisted','persisted-egress-backoff','persisted-egress-success','existing-proxy-during-restart-backoff','stale-health','slow-egress','fatal-recovery-state','slow-cycle-not-resume','resume-keeps-egress-backoff','periodic-check-retains-valid-result')) {
     $fixture=Get-GuardPath ('private\supervisor-fixture-'+[guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path (Join-Path $fixture 'private') -Force|Out-Null
     $wrapper=Join-Path $fixture 'runner.ps1'
@@ -59,7 +59,19 @@ function Assert-GuardFirewall{}
 function Get-GuardDesktop{$script:FixtureState.Desktop}
 function Get-Process{[pscustomobject]@{Id=123;Handle=1;HasExited=$false}}
 function Get-CimInstance{if($Scenario -eq 'active-code-probe-failure'){[pscustomobject]@{ExecutablePath='fixture-code'}}}
-function Get-GuardRuntimeSafety{[pscustomobject]@{Safe=($Scenario -ne 'runtime-unsafe');Issues=@('UnexpectedRuntimeNetworkPath');CodeProcessCount=if($Scenario -eq 'active-code-probe-failure'){1}else{0}}}
+function Get-GuardRuntimeSafety{
+    $probeFailures=@()
+    if($Scenario -in @('runtime-reader-recovered','runtime-reader-unavailable')){
+        $probeFailures+=@([pscustomobject]@{CandidateIndex=1;Round=1;Outcome='TimedOut';ElapsedMilliseconds=1500;ExitCode=$null;NativeErrorCode=$null})
+        if($Scenario -eq 'runtime-reader-unavailable'){$probeFailures+=@([pscustomobject]@{CandidateIndex=1;Round=2;Outcome='TimedOut';ElapsedMilliseconds=2250;ExitCode=$null;NativeErrorCode=$null})}
+    }
+    [pscustomobject]@{
+        Safe=($Scenario -notin @('runtime-unsafe','runtime-reader-unavailable'))
+        Issues=if($Scenario -eq 'runtime-reader-unavailable'){@('RuntimeReaderUnavailable')}elseif($Scenario -eq 'runtime-reader-recovered'){@()}else{@('UnexpectedRuntimeNetworkPath')}
+        CodeProcessCount=if($Scenario -in @('active-code-probe-failure','runtime-reader-recovered','runtime-reader-unavailable')){1}else{0}
+        PythonProbeFailures=$probeFailures
+    }
+}
 function Stop-GuardUnsafeRuntime{$script:StoppedRuntime++}
 function Stop-GuardProxy{$script:StoppedProxy++}
 function Stop-GuardProxyEmergency{$script:StoppedProxy++}
@@ -102,10 +114,28 @@ if($Scenario -eq 'existing-proxy-during-restart-backoff'){Write-GuardJson (Get-G
         $health=Read-GuardJson (Join-Path $fixture 'private\supervisor-health.json')
         $counts=Read-GuardJson (Join-Path $fixture 'counts.json')
         $held=Test-Path (Join-Path $fixture 'private\safety-hold.json')
+        $events=@(Get-Content (Join-Path $fixture 'private\supervisor-events.jsonl')|ConvertFrom-Json)
+        $probeEvents=@($events|Where-Object Kind -eq 'RuntimeReaderProbeFailed')
+        $safetyStops=@($events|Where-Object Kind -eq 'SafetyStop')
         $recovery=if(Test-Path (Join-Path $fixture 'private\proxy-recovery.json')){if($scenario -ne 'fatal-recovery-state'){Read-GuardJson (Join-Path $fixture 'private\proxy-recovery.json')}}
         $passed=switch($scenario){
             'egress-drift' {$health.Status -eq 'SafetyHold' -and $held -and $counts.StoppedProxy -eq 1}
             'runtime-unsafe' {$health.Status -eq 'SafetyHold' -and $held -and $counts.StoppedRuntime -eq 1 -and $counts.StoppedProxy -eq 1}
+            'runtime-reader-recovered' {
+                $health.Status -eq 'Healthy' -and -not $held -and $counts.StoppedRuntime -eq 0 -and $counts.StoppedProxy -eq 0 -and
+                $counts.EgressCalls -eq 1 -and $health.LastSafetyCheck -and $health.LastEgressCheck -and $safetyStops.Count -eq 0 -and
+                $probeEvents.Count -eq 1 -and $probeEvents[0].Data.RunId -eq 'fixture-current-run' -and $probeEvents[0].Data.Recovered -eq $true -and
+                @($probeEvents[0].Data.Attempts).Count -eq 1 -and $probeEvents[0].Data.Attempts[0].Outcome -eq 'TimedOut' -and
+                $probeEvents[0].Data.Attempts[0].Round -eq 1
+            }
+            'runtime-reader-unavailable' {
+                $health.Status -eq 'SafetyHold' -and $held -and $counts.StoppedRuntime -eq 1 -and $counts.StoppedProxy -eq 1 -and
+                $counts.EgressCalls -eq 0 -and -not $health.LastSafetyCheck -and $safetyStops.Count -eq 1 -and
+                $safetyStops[0].Data.Reason -eq 'Runtime safety mismatch: RuntimeReaderUnavailable' -and
+                $probeEvents.Count -eq 1 -and $probeEvents[0].Data.RunId -eq 'fixture-current-run' -and $probeEvents[0].Data.Recovered -eq $false -and
+                @($probeEvents[0].Data.Attempts).Count -eq 2 -and @($probeEvents[0].Data.Attempts|Where-Object Outcome -ne 'TimedOut').Count -eq 0 -and
+                ($probeEvents[0].Data.Attempts.Round -join ',') -eq '1,2'
+            }
             'tls-disabled' {$health.Status -eq 'SafetyHold' -and $held -and $counts.StoppedProxy -eq 1}
             'active-code-probe-failure' {$health.Status -eq 'UpstreamUnavailable' -and $counts.StoppedProxy -eq 0 -and -not $held -and $health.ConsecutiveFailures -eq 3}
             'idle-probe-failure' {$health.Status -eq 'UpstreamUnavailable' -and $counts.StoppedProxy -eq 1 -and -not $held -and $health.ConsecutiveFailures -eq 3}
@@ -129,6 +159,13 @@ if($Scenario -eq 'existing-proxy-during-restart-backoff'){Write-GuardJson (Get-G
         $contract=$health.SchemaVersion -eq 2 -and $health.RunId -eq 'fixture-current-run' -and $health.HostPid -eq 42 -and $health.SupervisorStarted -and $first.Status -eq 'Starting' -and -not $first.LastSafetyCheck -and -not $first.LastEgressCheck
         $preparing=@($counts.HealthSnapshots|Where-Object {$_.Status -in @('Healthy','ProbeDegraded') -and (-not $_.LastSafetyCheck -or -not $_.LastEgressCheck -or ([datetime]$_.LastSafetyCheck).ToUniversalTime() -lt ([datetime]$_.SupervisorStarted).ToUniversalTime() -or ([datetime]$_.LastEgressCheck).ToUniversalTime() -lt ([datetime]$_.SupervisorStarted).ToUniversalTime())}).Count -eq 0
         if(-not $passed -or -not $contract -or -not $preparing){throw ('Supervisor decision regression failed: '+$scenario+' health='+($health|ConvertTo-Json -Compress)+' counts='+($counts|ConvertTo-Json -Compress -Depth 3))}
+        if($scenario -in @('runtime-reader-recovered','runtime-reader-unavailable')){
+            $runtimeEvidence=Read-GuardJson (Join-Path $fixture 'private\runtime-safety.json')
+            if(@($runtimeEvidence.PythonProbeFailures).Count -ne @($probeEvents[0].Data.Attempts).Count -or
+                ($runtimeEvidence.PythonProbeFailures|ConvertTo-Json -Depth 5 -Compress) -cne ($probeEvents[0].Data.Attempts|ConvertTo-Json -Depth 5 -Compress)){
+                throw ('Python probe failure metadata was not preserved in runtime evidence and the worker event: '+$scenario)
+            }
+        }
         if($scenario -eq 'healthy-current-run'){
             if([long]$counts.NextSafetyTicks -ne ([long]$counts.SafetyStartTicks+[timespan]::FromSeconds(60).Ticks) -or [long]$counts.NextProbeTicks -ne ([datetimeoffset]$health.LastEgressCheck).UtcDateTime.AddSeconds(60).Ticks){throw 'UTC completion strings shifted the next check schedule into local clock ticks.'}
             $results+=@{Scenario='utc-next-check-schedule';Passed=$true;SafetyIntervalSeconds=60;EgressIntervalSeconds=60}
@@ -161,6 +198,14 @@ function Get-Process{[pscustomobject]@{StartTime=[datetime]::UtcNow}}
     $runtimeFooter=@'
 function Get-GuardTcpListeners{}
 $python=Resolve-GuardReaderPython
+# The native reader deadline starts with an interpreter already proven runnable.
+# Keep discovery/probe startup outside this separate 200 ms evidence-read budget.
+$originalResolver=${function:Resolve-GuardReaderPython}
+$script:FixtureReaderPython=$python
+function Resolve-GuardReaderPython([int]$TimeoutMilliseconds=8000,[ref]$ProbeFailures){
+    if($null -ne $ProbeFailures){$ProbeFailures.Value=@()}
+    $script:FixtureReaderPython
+}
 $info=[Diagnostics.ProcessStartInfo]::new();$info.FileName=$python;$info.UseShellExecute=$false;$info.CreateNoWindow=$true
 $info.ArgumentList.Add('-c');$info.ArgumentList.Add('import time; time.sleep(20)')
 $sentinel=[Diagnostics.Process]::Start($info)
@@ -195,7 +240,7 @@ try{
         @{Name='dedicated-proxy-established';Address='127.0.0.1';Port=10818;State='Established';Safe=$true;Pending=0;Listener=$false},
         @{Name='owned-local-service-established';Address='127.0.0.1';Port=8771;State='Established';Safe=$true;Pending=0;Listener=$true}
     )){
-        $script:FixtureConnections=@([pscustomobject]@{OwningProcess=101;RemoteAddress=$case.Address;RemotePort=$case.Port;State=$case.State})
+        $script:FixtureConnections=@([pscustomobject]@{OwningProcess=101;LocalAddress=if($case.Address -eq '::1'){'::1'}else{'127.0.0.1'};LocalPort=49152;RemoteAddress=$case.Address;RemotePort=$case.Port;State=$case.State})
         $script:FixtureListeners=if($case.Listener){@([pscustomobject]@{OwningProcess=102;LocalAddress='127.0.0.1';LocalPort=$case.Port;RemoteAddress='0.0.0.0';RemotePort=0;State='Listen'})}else{@()}
         $observed=Get-GuardRuntimeSafety -EvidenceBudgetMilliseconds 3000 -ReaderTimeoutMilliseconds 1000
         if($observed.Safe -ne $case.Safe -or @($observed.UnconfirmedLoopbackConnections).Count -ne $case.Pending -or (@($observed.UnexpectedConnections).Count -gt 0) -eq $case.Safe){throw ('Network decision fixture failed: '+$case.Name+' '+($observed|ConvertTo-Json -Depth 8 -Compress))}
@@ -218,6 +263,7 @@ try{
         try{Assert-GuardLaunchedRuntime 101 $start ([datetime]::UtcNow.AddSeconds(5));throw 'Unexpected launch confirmation'}catch{if($_.Exception.Message -notlike 'RuntimeLaunchIdentityChanged:*'){throw}}
         $cases+=@{Scenario=$mode;Passed=$true}
     }
+    Set-Item -Path Function:\Resolve-GuardReaderPython -Value $originalResolver
     function Get-GuardReaderPythonCandidates{@('python.exe','C:\WindowsApps\python.exe',(Join-Path $PSScriptRoot 'missing\python.exe'))}
     try{$null=Resolve-GuardReaderPython;throw 'Missing reader incorrectly accepted'}catch{if($_.Exception.Message -notlike 'RuntimeReaderUnavailable:*'){throw}}
     $missing=Get-GuardRuntimeSnapshot

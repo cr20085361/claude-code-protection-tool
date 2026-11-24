@@ -149,6 +149,15 @@ try {
                 Set-SupervisorPhase 'Runtime'
                 $runtime=Get-GuardRuntimeSafety;$activeCodeCount=$runtime.CodeProcessCount
                 Write-GuardJson (Get-GuardPath 'private\runtime-safety.json') $runtime
+                if($runtime.PythonProbeFailures){
+                    # Diagnostic delivery cannot replace the safety decision below.
+                    try{
+                        Write-SupervisorEvent 'RuntimeReaderProbeFailed' @{
+                            RunId=$RunId;Recovered=('RuntimeReaderUnavailable' -notin $runtime.Issues)
+                            Attempts=$runtime.PythonProbeFailures
+                        }
+                    }catch{Write-Warning 'Could not append Python probe diagnostics; see runtime-safety.json.'}
+                }
                 if(-not $runtime.Safe){Stop-GuardUnsafeRuntime $runtime;throw ('Runtime safety mismatch: '+($runtime.Issues -join ','))}
                 $lastSafetyCheck=[datetime]::UtcNow.ToString('o');$nextSafetyCheck=$safetyStarted.AddSeconds(60)
                 Complete-SupervisorPhase

@@ -10,11 +10,11 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
-[assembly: System.Reflection.AssemblyVersion("1.9.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.9.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.9.1.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.9.1.0")]
 
 public sealed class ClaudeGuardWindow : Form {
-    public const string BuildVersion="v1.9.0";
+    public const string BuildVersion="v1.9.1";
     static readonly Color CanvasBg=Color.FromArgb(244,246,249);
     static readonly Color CardBg=Color.White;
     static readonly Color CardBorder=Color.FromArgb(226,232,240);
@@ -499,8 +499,8 @@ public sealed class ClaudeGuardWindow : Form {
         string detail="守护检测到防护配置或运行状态异常。";
         if(IsCacheRepairTimeout(operation))detail="本地 Code 缓存修复超时，防护维护未完成。";
         else if(operation!=null && operation.Status=="Failed" && operation.FailureKind=="RuntimeReaderUnavailable")
-            detail="运行检查需要可用的 64 位 Python 3。请先安装或修复 Python。";
-        else if(reason.Contains("RuntimeReaderUnavailable"))detail="未找到可运行的 64 位 Python 3。请先安装或修复 Python。";
+            detail="维护时未能确认 64 位 Python 3 可运行。请在当前 Windows 账号下检查 Python。";
+        else if(reason.Contains("RuntimeReaderUnavailable"))detail="64 位 Python 3 探测失败，守护无法核验运行环境。请查看守护日志中的探测诊断。";
         else if(reason.Contains("RuntimeEnvironmentUnreadable"))detail="守护无法核验 Claude 的运行环境。请确认 64 位 Python 3 可用，并用同一 Windows 账号打开入口。";
         else if(reason.Contains("RuntimeEnvironmentMismatch"))detail="Claude 的运行环境与核准配置不符。";
         else if(reason.Contains("UnexpectedRuntimeNetworkPath") || reason.Contains("Fixed egress mismatch"))detail="守护发现未经核准的网络连接或出口。";

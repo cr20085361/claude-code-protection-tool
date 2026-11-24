@@ -5,8 +5,8 @@
     "recorded_at": "2026-10-01T12:03:55+08:00",
     "version_source": null
   },
-  "current_version": "v1.9.0",
-  "completed_iterations": 32,
+  "current_version": "v1.9.1",
+  "completed_iterations": 33,
   "history": [
     {
       "id": "1ed80264-8644-40fd-a830-3d725048fa07",
@@ -1122,6 +1122,21 @@
         "scope": "root-source-and-AGENTS-v1",
         "sha256": "072bc34c2d763fc22f3c6bf0f8d3f06ba2d7579434871d700bbf39ebb13c489f",
         "file_count": 85
+      }
+    },
+    {
+      "id": "3075acf6-a905-48cc-8e1f-98d6af5c5fc5",
+      "from_version": "v1.9.0",
+      "to_version": "v1.9.1",
+      "level": "patch",
+      "summary": "Python 读取器探测增加有界重试与脱敏失败诊断，避免一次短暂探测失败强制结束 Claude 及本地 Code。",
+      "verification": "Python 探测 34 项、守护决策 41 项、本机预览 46 项和版本窗口 13 项通过。实际安装 EXE 的 26 项健康契约通过；守护配置的 PowerShell 实机探测确认 64 位 CPython，现场维护成功，新守护 Healthy，双站出口通过，共享代理身份保持。",
+      "recorded_at": "2026-11-24T10:57:21.3686320+08:00",
+      "source_fingerprint": {
+        "algorithm": "sha256",
+        "scope": "root-source-and-AGENTS-v1",
+        "sha256": "95968868cc988a8fe7ae8fb978cface41b95f7c699745d28151e8fc5de742912",
+        "file_count": 86
       }
     }
   ],
